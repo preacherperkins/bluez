@@ -6,6 +6,7 @@
 .deps
 .libs
 .dirstamp
+.dir-locals.el
 Makefile
 Makefile.in
 aclocal.m4
@@ -97,3 +98,4 @@ unit/test-gobex-packet
 unit/test-gobex-transfer
 unit/test-*.log
 unit/test-*.trs
+
