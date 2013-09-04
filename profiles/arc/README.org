@@ -1,0 +1,114 @@
+* The ARC Profile
+
+** Introduction
+
+   The ARC-profile is a Bluetooth Profile to deal with ARC-messages, as well
+   as other $COMPANY-specific needs. The ARC-profile works over Bluetooth-LE
+   (BTLE). Currently, the support for Bluez for BTLE is a work in progress,
+   i.e., many things that /should/ be straightforward require quite a bit of
+   code. On top of that, while the BTLE-protocol has some nice
+   characteristics, it's not a perfect match for our needs; thus, we need to
+   work around those.
+
+   Bluez is normally controlled through its DBus-interface, however, not all
+   of the needed functionality is available there, so we need to (re)implement
+   such functionality in the ARC-profile and its DBus-interfaces.
+
+** The ARC-over-BTLE protocol
+
+   TODO...
+
+** DBus-interfaces
+
+   The ARC-profile exposes /any number/ of two different DBus-interfaces.
+
+   =org.bluez.ARCServer1= on =/org/bluez/hcix= (with =x= being the id of the
+   interface). Its functionality is implemented in =arc-server.c=. Note,
+   =/org/bluez/hcix= is the object-path for the /adapter/, that is, an object
+   representing some local Bluetooth-adapter.
+
+   Then, for each (remote) device, there's =org.bluez.ARCProxy1= on
+   =/org/bluez/hcix/<btid>=, which represents a local proxy for the remote
+   device. This interface only appears after connecting to a remove
+   (ARC-supporting) device. Note, =/org/bluez/hcix/<btid>= is the object-path
+   for some /device/, that is, an object representing some remote
+   Bluetooth-device.
+
+   Note that the '1' in =ARCServer1= and =ARCProxy1= denotes the
+   interface-version, just like Bluez does it.
+
+** Advertising
+
+   BTLE-advertising is the way to tell the world about ones services; we
+   cannot trigger or manipulate this through the Bluez DBus-interface, so
+   this functionality is added to the ARC-profile
+   (=arc-server.c=).
+
+   There are some limitations to BTLE-advertising, which require some tricks:
+   - you cannot connect or scan for devices while advertising, or advertise
+     while connected
+   - there are only 31 bytes available for advertising
+   (this is all assuming current Bluez, common adapters)
+
+   For this reason, we switch between advertising / not advertising, so that
+   clients can quickly connect / execute some ARC-command and leave again. In
+   fact, clients are forcibly disconnected after a short while. Of course,
+   this will only (somewhat) work if ARC is the /only/ profile in use. The
+   exact times of advertising vs not-advertising+scanning are still to be
+   decided. Note, the ARC-profile implements the logic to do this, but the
+   some external agent needs to trigger the switches between advertising and
+   not-advertising + discovery.
+
+   Also, since the advertisement data is small (31 bytes), we cannot advertise
+   very much. One thing we need to advertise is the ARC-service UUID; this is
+   128 bits (16 bytes), which eats more than half of the 31 bytes. The rest,
+   we fill with the (possibly truncated) 'Friendly name' for the device (you
+   can get the full name through the name-characteristic).
+
+   Obviously, profiles really /shouldn't/ try to change the advertising state
+   by themselves, or need to manipulate the advertised data. However, there's
+   currently no other way to do so (without the command-line tools), so it's
+   done from there. In fact, the current way to change the advertisement-data
+   is by descending to the HCI-level, and coming up with the correct
+   byte-sequence to send it. This is a bit tedious, and also may interfere
+   with other profiles.
+
+
+** Building and running
+
+   To run Bluez with ARC-support, first get the version that supports it:
+#+BEGIN_EXAMPLE
+ $ git clone https://github.com/MorseProject/bluez
+#+END_EXAMPLE
+
+   This version is based one Bluez-master, which is periodically merged.
+
+   Then, you can build it with:
+
+#+BEGIN_EXAMPLE
+ $ autoreconf -i; ./configure --enable-experimental --enable-debug; make clean; make
+#+END_EXAMPLE
+
+   The build-process should give you appropriate warnings when you miss some
+   dependencies.
+
+   After this has been completed succesfully, you can try to start it. Before
+   doing so, it's important to shutdown any running bluetooth-daemons:
+
+#+BEGIN_EXAMPLE
+  $ sudo systemctl stop bluetooth.service
+#+END_EXAMPLE
+
+   (or the equivalent for /SysV-init/, /upstart/, etc.)
+
+   Then, start it with:
+
+#+BEGIN_EXAMPLE
+ $ sudo ./bluetoothd -E -d -n -p arc
+#+END_EXAMPLE
+
+   This starts =bluetoothd= with /just/ the ARC-profile, and gives all kinds
+   of hopefully useful debugging information. The ARC-profile tends to give
+   its output in bold green, if your terminal supports it.
+
+#+startup:showall
