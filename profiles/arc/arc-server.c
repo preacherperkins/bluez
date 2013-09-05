@@ -252,8 +252,8 @@ hci_set_adv_params (int hcidev)
 	adv_params_cp.chan_map	   = 0x07; /* all channels */
 	adv_params_cp.advtype	   = 0x00; /* Connectable undirected
 					    * advertising */
-	DBG ("hci adv data");
-	dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp));
+	/* DBG ("hci adv data"); */
+	/* dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp)); */
 
 	memset(&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
@@ -271,46 +271,55 @@ hci_set_adv_params (int hcidev)
 /* this all makes sense after reading the BT spec, in particular
  * Appendix C */
 static int
-hci_set_arc_data (int hcidev)
+hci_set_adv_data (int hcidev, const char *name)
 {
 	struct hci_request		rq;
 	le_set_advertising_data_cp	advdata_cp;
 	uint8_t				status;
 	int				ret;
 	bt_uuid_t			uuid;
+	unsigned			offset, partsize;
 
 	g_return_val_if_fail (hcidev, -1);
 
 	memset(&advdata_cp, 0, sizeof(advdata_cp));
+	offset = 0;
 
 	/* the UUID to advertise */
-	advdata_cp.length  = sizeof(uint128_t) + 2;
-	advdata_cp.data[0] = sizeof(uint128_t) + 1;
-	advdata_cp.data[1] = 0x07;
-
+	partsize = sizeof(uint128_t) + 1;
+	advdata_cp.data[offset + 0] = partsize;
+	advdata_cp.data[offset + 1] = 0x07; /* uuid */
 	bt_string_to_uuid (&uuid, ARC_SERVICE_UUID);
 	g_assert (uuid.type == BT_UUID128);
-
-	memcpy (&advdata_cp.data[2], &uuid.value.u128,
+	memcpy (&advdata_cp.data[offset + 2], &uuid.value.u128,
 		sizeof(uuid.value.u128));
+	offset += partsize + 1;
 
-	DBG ("hci arc data");
+	/* the local name to advertise */
+	if (name) {
+		unsigned strsize;
+		strsize = MIN(strlen(name),
+			      LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 3);
+		advdata_cp.data[offset + 0] = strsize + 1;
+		advdata_cp.data[offset + 1] = 0x09;	/* local name */
+		memcpy (&advdata_cp.data[offset + 2], name, strsize);
+		offset += strsize + 2;
+	}
 
-	return hci_send_cmd (hcidev,
-			     OGF_LE_CTL,
-			     OCF_LE_SET_ADVERTISING_DATA,
-			     sizeof (advdata_cp),
-			     &advdata_cp);
+	advdata_cp.length  = offset;
 
-	/* memset (&rq, 0, sizeof(rq)); */
-	/* rq.ogf	  = OGF_LE_CTL; */
-	/* rq.ocf	  = OCF_LE_SET_ADVERTISING_DATA; */
-	/* rq.cparam = &advdata_cp; */
-	/* rq.clen	  = sizeof (advdata_cp); */
-	/* rq.rparam = &status; */
-	/* rq.rlen	  = 1; */
+	DBG ("hci adv data");
+	dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp));
 
-	/* return hci_send_req (hcidev, &rq, 1000); */
+	memset (&rq, 0, sizeof(rq));
+	rq.ogf	  = OGF_LE_CTL;
+	rq.ocf	  = OCF_LE_SET_ADVERTISING_DATA;
+	rq.cparam = &advdata_cp;
+	rq.clen	  = sizeof (advdata_cp);
+	rq.rparam = &status;
+	rq.rlen	  = 1;
+
+	return hci_send_req (hcidev, &rq, 1000);
 }
 
 
@@ -767,6 +776,17 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	return reply;
 }
 
+
+/**
+ * This updates the name in GATT as well as the device name (which is
+ * not settable of dbus)
+ *
+ * @param conn
+ * @param msg
+ * @param self
+ *
+ * @return
+ */
 static DBusMessage*
 update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
@@ -1009,7 +1029,7 @@ enable_adv (ARCServer *self, gboolean enable)
 
 	/* it seems we need to set this each time after enabling
 	 * advertising... */
-	ret = hci_set_arc_data (hcidev);
+	ret = hci_set_adv_data (hcidev, btd_adapter_get_name (self->adapter));
 	if (ret < 0) {
 		error ("setting arc data failed (%d)", ret);
 		goto leave;
