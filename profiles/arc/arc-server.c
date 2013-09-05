@@ -76,20 +76,20 @@ typedef struct  {
 	struct mgmt *mgmt;
 } ARCServer;
 
-static gboolean do_enable_adv (ARCServer *aserver);
-static gboolean enable_adv (ARCServer *aserver, gboolean enable);
+static gboolean do_enable_adv (ARCServer *self);
+static gboolean enable_adv (ARCServer *self, gboolean enable);
 
 static void
 each_device_disconnect (struct btd_device *device, void *data)
 {
-	ARCServer *aserver;
+	ARCServer *self;
 
-	aserver = (ARCServer*)data;
+	self = (ARCServer*)data;
 
 	if (!device_is_connected (device))
 		return;
 
-	btd_adapter_disconnect_device (aserver->adapter,
+	btd_adapter_disconnect_device (self->adapter,
 				       device_get_address(device),
 				       BDADDR_LE_PUBLIC);
 }
@@ -97,21 +97,21 @@ each_device_disconnect (struct btd_device *device, void *data)
 
 static void
 on_disconnected (uint16_t index, uint16_t length,
-		 const void *param, ARCServer *aserver)
+		 const void *param, ARCServer *self)
 {
 	/* make sure it's really disconnected */
-	btd_adapter_for_each_device (aserver->adapter,
-				     each_device_disconnect, aserver);
+	btd_adapter_for_each_device (self->adapter,
+				     each_device_disconnect, self);
 
 	/* re-enable advertising, since the connection turned it off */
-	enable_adv (aserver, TRUE);
+	enable_adv (self, TRUE);
 }
 
 
 
 static void
 on_connected (uint16_t index, uint16_t length,
-		 const void *param, ARCServer *aserver)
+		 const void *param, ARCServer *self)
 {
 	DBG ("%s", __FUNCTION__);
 }
@@ -119,9 +119,9 @@ on_connected (uint16_t index, uint16_t length,
 
 
 static gboolean
-on_timeout_adv (ARCServer *aserver)
+on_timeout_adv (ARCServer *self)
 {
-	enable_adv (aserver, TRUE);
+	enable_adv (self, TRUE);
 	return TRUE;
 }
 
@@ -131,59 +131,59 @@ on_timeout_adv (ARCServer *aserver)
 ARCServer*
 arc_server_new (struct btd_adapter *adapter)
 {
-	ARCServer	*aserver;
+	ARCServer	*self;
 	unsigned	 u;
 
-	aserver		 = g_new0 (ARCServer, 1);
-	aserver->adapter = adapter;
+	self		 = g_new0 (ARCServer, 1);
+	self->adapter = adapter;
 
 	for (u = 0; u != ARC_ID_NUM; ++u)
-		aserver->values[u] = g_string_sized_new (20);
+		self->values[u] = g_string_sized_new (20);
 
 	/*
 	 * we need the mgmt interface to be able to get the
 	 * connected/disconnected callbacks
 	 */
-	aserver->mgmt = mgmt_new_default ();
-	mgmt_register(aserver->mgmt, MGMT_EV_DEVICE_DISCONNECTED,
+	self->mgmt = mgmt_new_default ();
+	mgmt_register(self->mgmt, MGMT_EV_DEVICE_DISCONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_disconnected, aserver, NULL);
+		      (mgmt_notify_func_t)on_disconnected, self, NULL);
 
-	mgmt_register(aserver->mgmt, MGMT_EV_DEVICE_CONNECTED,
+	mgmt_register(self->mgmt, MGMT_EV_DEVICE_CONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_connected, aserver, NULL);
+		      (mgmt_notify_func_t)on_connected, self, NULL);
 
-	return aserver;
+	return self;
 }
 
 static void
-arc_server_destroy (ARCServer *aserver)
+arc_server_destroy (ARCServer *self)
 {
 	GSList		*cur;
 	unsigned	 u;
 
-	if (!aserver)
+	if (!self)
 		return;
 
 	for (u = 0; u != ARC_ID_NUM; ++u)
-		g_string_free (aserver->values[u], TRUE);
+		g_string_free (self->values[u], TRUE);
 
-	ARC_SERVERS = g_slist_remove (ARC_SERVERS, aserver);
+	ARC_SERVERS = g_slist_remove (ARC_SERVERS, self);
 
-	if (aserver->adv_id != 0) {
-		g_source_remove (aserver->adv_id);
-		aserver->adv_id = 0;
+	if (self->adv_id != 0) {
+		g_source_remove (self->adv_id);
+		self->adv_id = 0;
 	}
 
-	mgmt_unref (aserver->mgmt);
-	g_free (aserver);
+	mgmt_unref (self->mgmt);
+	g_free (self);
 }
 
 
 static gboolean
-do_enable_adv (ARCServer *aserver)
+do_enable_adv (ARCServer *self)
 {
-	if (!enable_adv (aserver, TRUE))
+	if (!enable_adv (self, TRUE))
 		error ("failed to restart advertising");
 	else
 		DBG ("restarted advertising");
@@ -198,11 +198,11 @@ find_arc_server (struct btd_adapter *adapter)
 	GSList *cur;
 
 	for (cur = ARC_SERVERS; cur; cur = g_slist_next (cur)) {
-		ARCServer *aserver;
-		aserver = (ARCServer*)cur->data;
+		ARCServer *self;
+		self = (ARCServer*)cur->data;
 
-		if (aserver->adapter == adapter)
-			return aserver;
+		if (self->adapter == adapter)
+			return self;
 	}
 	return NULL;
 }
@@ -212,13 +212,13 @@ find_arc_server_from_service (struct btd_service *service)
 {
 	struct btd_device	*device;
 	struct btd_adapter	*adapter;
-	ARCServer		*aserver;
+	ARCServer		*self;
 
 	device	= btd_service_get_device (service);
 	adapter	= device_get_adapter (device);
-	aserver = find_arc_server (adapter);
+	self = find_arc_server (adapter);
 
-	return aserver;
+	return self;
 }
 
 
@@ -227,13 +227,25 @@ static ARCServer*
 find_arc_server_from_device (struct btd_device *device)
 {
 	struct btd_adapter	*adapter;
-	ARCServer		*aserver;
+	ARCServer		*self;
 
 	adapter	= device_get_adapter (device);
-	aserver = find_arc_server (adapter);
+	self = find_arc_server (adapter);
 
-	return aserver;
+	return self;
 }
+
+
+static void
+dump_bytes (uint8_t *bytes, size_t len)
+{
+	unsigned u;
+
+	for (u = 0; u !=len; ++u)
+		g_print ("%02X ", bytes[u]);
+	g_print ("(%d)\n", (int)len);
+}
+
 
 static gboolean
 hci_set_adv_params (int hcidev)
@@ -262,6 +274,9 @@ hci_set_adv_params (int hcidev)
 		return FALSE;
 	}
 
+	DBG ("%s", __FUNCTION__);
+	dump_bytes ((uint8_t*)&rq, sizeof(rq));
+
 	return TRUE;
 }
 
@@ -270,14 +285,13 @@ hci_set_adv_params (int hcidev)
 /* this all makes sense after reading the BT spec, in particular
  * Appendix C */
 static gboolean
-hci_adv_arc (int hcidev)
+hci_adv_arc (const char *name, int hcidev)
 {
 	struct hci_request		 rq;
 	/* le_set_advertising_data_cp	 advdata_cp; */
 	uint8_t				 status;
 	int				 ret;
 	bt_uuid_t			 uuid;
-	const char			*name;
 
 	typedef struct {
 		le_set_advertising_data_cp	adv_uuid;
@@ -285,6 +299,9 @@ hci_adv_arc (int hcidev)
 		/* le_set_advertising_data_cp	adv_flags; */
 	} __attribute__ ((packed)) ADVData;
 	ADVData advdata;
+
+	g_return_val_if_fail (name, FALSE);
+	g_return_val_if_fail (hcidev, FALSE);
 
 	memset(&advdata, 0, sizeof(ADVData));
 
@@ -296,11 +313,23 @@ hci_adv_arc (int hcidev)
 	bt_string_to_uuid (&uuid, ARC_SERVICE_UUID);
 	g_assert (uuid.type == BT_UUID128);
 
+	DBG ("xxxx");
+	dump_bytes ((uint8_t*)&advdata, sizeof(advdata));
+
 	memcpy (&advdata.adv_uuid.data[2], &uuid.value.u128,
 		sizeof(uuid.value.u128));
 
-	/* /\* the local name to advertise *\/ */
-	/* name			 = "HelloWorld"; */
+	DBG ("yyyy");
+	dump_bytes ((uint8_t*)&advdata, sizeof(advdata));
+
+
+	memcpy (&advdata.adv_uuid.data[2], &uuid.value.u128,
+		sizeof(uuid.value.u128));
+
+	DBG ("zzz");
+	dump_bytes ((uint8_t*)&advdata, sizeof(advdata));
+
+	/* /\* /\\* the local name to advertise *\\/ *\/ */
 	/* advdata.adv_name.length	 = strlen (name) + 2; */
 	/* advdata.adv_name.data[0] = strlen (name) + 1; */
 	/* advdata.adv_name.data[1]  = 0x09; */
@@ -312,7 +341,6 @@ hci_adv_arc (int hcidev)
 	/* advdata.adv_flags.data[1] = 0x01; */
 	/* advdata.adv_flags.data[2] = 0x02; /\* par. 18.1, pg. 1761 *\/ */
 
-
 	memset (&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
 	rq.ocf	  = OCF_LE_SET_ADVERTISING_DATA;
@@ -321,11 +349,15 @@ hci_adv_arc (int hcidev)
 	rq.rparam = &status;
 	rq.rlen	  = 1;
 
+	DBG ("%s", __FUNCTION__);
+	dump_bytes ((uint8_t*)&rq, sizeof(rq));
+
 	ret = hci_send_req (hcidev, &rq, 1000);
 	if (ret < 0) {
 		error ("failed to enable advertising");
 		return FALSE;
-	}
+	} else
+		DBG ("advertising data");
 
 	return TRUE;
 }
@@ -364,7 +396,7 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 
 
 static void
-handle_blob (ARCServer *aserver, struct attribute *attr,
+handle_blob (ARCServer *self, struct attribute *attr,
 	     struct btd_device *device, ARCID id)
 {
 	if (id == ARC_REQUEST_ID) {
@@ -380,8 +412,8 @@ handle_blob (ARCServer *aserver, struct attribute *attr,
 		 * existing result */
 		DBG ("clearing old results");
 		ret = attrib_db_update (
-			aserver->adapter,
-			aserver->val_handles[ARC_RESULT_ID],
+			self->adapter,
+			self->val_handles[ARC_RESULT_ID],
 			NULL,
 			(uint8_t*)NULL,
 			0,
@@ -393,23 +425,23 @@ handle_blob (ARCServer *aserver, struct attribute *attr,
 		DBG ("emitting method-called");
 		g_dbus_emit_signal (
 			btd_get_dbus_connection(),
-			adapter_get_path (aserver->adapter),
+			adapter_get_path (self->adapter),
 			ARC_SERVER_IFACE, "MethodCalled",
 			DBUS_TYPE_OBJECT_PATH, &objpath,
 			DBUS_TYPE_STRING,
-			&aserver->values[ARC_REQUEST_ID]->str,
+			&self->values[ARC_REQUEST_ID]->str,
 			DBUS_TYPE_INVALID);
 	}
 }
 
 static gboolean
-do_disconnect (ARCServer *aserver)
+do_disconnect (ARCServer *self)
 {
 #ifdef AUTO_DISCONNECT
 	DBG ("automatically disconnecting");
-	g_timeout_add (1000, (GSourceFunc)do_enable_adv, aserver);
-	btd_adapter_for_each_device (aserver->adapter,
-				     each_device_disconnect, aserver);
+	g_timeout_add (1000, (GSourceFunc)do_enable_adv, self);
+	btd_adapter_for_each_device (self->adapter,
+				     each_device_disconnect, self);
 #endif /*AUIO_DISCONNECT*/
 	return FALSE;
 }
@@ -421,26 +453,26 @@ do_disconnect (ARCServer *aserver)
  * the device is able to service other devices too
  */
 static void
-update_disconnect_timeouts (ARCServer *aserver, struct btd_device *device)
+update_disconnect_timeouts (ARCServer *self, struct btd_device *device)
 {
-	if (aserver->disc_id != 0)
-		g_source_remove (aserver->disc_id);
+	if (self->disc_id != 0)
+		g_source_remove (self->disc_id);
 
-	aserver->disc_id  =
+	self->disc_id  =
 		g_timeout_add_seconds (
 			CLIENT_TIMEOUT,
-			(GSourceFunc)do_disconnect, aserver);
+			(GSourceFunc)do_disconnect, self);
 }
 
 
 
 static ARCID
-find_id_for_attribute (ARCServer *aserver, struct attribute* attr)
+find_id_for_attribute (ARCServer *self, struct attribute* attr)
 {
 	unsigned u;
 
 	for (u = 0; u != ARC_ID_NUM; ++u) {
-		if (attr->handle == aserver->val_handles[u])
+		if (attr->handle == self->val_handles[u])
 			return u;
 	}
 
@@ -450,16 +482,16 @@ find_id_for_attribute (ARCServer *aserver, struct attribute* attr)
 
 static uint8_t
 on_attr_write (struct attribute *attr, struct btd_device *device,
-	       ARCServer *aserver)
+	       ARCServer *self)
 {
 	ARCID		 id;
 	GString		*gstr;
 	char		*str, *s;
 
 	DBG ("writing handle 0x%04x", attr->handle);
-	update_disconnect_timeouts (aserver, device);
+	update_disconnect_timeouts (self, device);
 
-	id = find_id_for_attribute (aserver, attr);
+	id = find_id_for_attribute (self, attr);
 	if (id == ARC_ID_NUM) {
 		error ("unknown handle");
 		return 0;
@@ -474,14 +506,14 @@ on_attr_write (struct attribute *attr, struct btd_device *device,
 	for (s = str; *s; ++s) {
 		switch ((unsigned char)*s) {
 		case 0xfe:
-			g_string_truncate (aserver->values[id], 0);
+			g_string_truncate (self->values[id], 0);
 			break;
 		case 0xff:
-			handle_blob (aserver, attr, device, id);
-			g_string_truncate (aserver->values[id], 0);
+			handle_blob (self, attr, device, id);
+			g_string_truncate (self->values[id], 0);
 			break;
 		default:
-			g_string_append_c (aserver->values[id], *s);
+			g_string_append_c (self->values[id], *s);
 			break;
 		}
 	}
@@ -493,20 +525,20 @@ on_attr_write (struct attribute *attr, struct btd_device *device,
 
 static uint8_t
 on_attr_read (struct attribute	*attr,
-	      struct btd_device *device, ARCServer *aserver)
+	      struct btd_device *device, ARCServer *self)
 {
 	ARCID	id;
 	GString *gstr;
 	char	 str[ATT_MAX_VALUE_LEN];
 	size_t	 len;
 
-	id = find_id_for_attribute (aserver, attr);
+	id = find_id_for_attribute (self, attr);
 	if (id == ARC_ID_NUM) {
 		error ("unknown handle");
 		return 0;
 	}
 
-	gstr = aserver->values[id];
+	gstr = self->values[id];
 	if (!gstr)
 		return 0;
 
@@ -514,11 +546,11 @@ on_attr_read (struct attribute	*attr,
 	if (len == 0)
 		return 0;
 
-	if (!aserver->writing_result) {
+	if (!self->writing_result) {
 		str[0] = 0xfe;
 		memcpy (str + 1, gstr->str, len - 1);
 		g_string_erase (gstr, 0, len  - 1);
-		aserver->writing_result = TRUE;
+		self->writing_result = TRUE;
 	} else {
 		memcpy (str, gstr->str, len);
 		g_string_erase (gstr, 0, len);
@@ -526,21 +558,21 @@ on_attr_read (struct attribute	*attr,
 
 	if (gstr->len == 0) {
 		str[len] = 0xff;
-		aserver->writing_result = FALSE;
+		self->writing_result = FALSE;
 	}
 
 	attr->data = (uint8_t*)str;
 	attr->len  = len;
 
 	DBG ("reading handle 0x%04x", attr->handle);
-	update_disconnect_timeouts (aserver, device);
+	update_disconnect_timeouts (self, device);
 
 	return 0;
 }
 
 
 static gboolean
-register_service (ARCServer *aserver)
+register_service (ARCServer *self)
 {
 	bt_uuid_t	uuid[ARC_ID_NUM], srv_uuid;
 	gboolean	rv;
@@ -557,33 +589,33 @@ register_service (ARCServer *aserver)
 	bt_string_to_uuid (&uuid[ARC_DEVNAME_ID], ARC_DEVNAME_UUID);
 
 	rv =  gatt_service_add (
-		aserver->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
+		self->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
 
 		/*
 		 * This gets the request from clients (ie., Json-blobs)
 		 * */
 		GATT_OPT_CHR_UUID, &uuid[ARC_REQUEST_ID],
 		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_WRITE | ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, aserver,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, aserver,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &aserver->val_handles[ARC_REQUEST_ID],
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_REQUEST_ID],
 
 		/*
 		 * This get the results of request (Json blobs)
 		 */
 		GATT_OPT_CHR_UUID, &uuid[ARC_RESULT_ID],
 		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, aserver,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &aserver->val_handles[ARC_RESULT_ID],
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_RESULT_ID],
 
 		/*
 		 * This get events (ie., data for /all/ clients
 		 */
 		GATT_OPT_CHR_UUID, &uuid[ARC_EVENT_ID],
 		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ | ATT_CHAR_PROPER_WRITE,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, aserver,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, aserver,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &aserver->val_handles[ARC_EVENT_ID],
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_EVENT_ID],
 
 		/*
 		 * It seems that sometimes iOS-clients don't see the alias/name
@@ -592,14 +624,14 @@ register_service (ARCServer *aserver)
 		 */
 		GATT_OPT_CHR_UUID, &uuid[ARC_DEVNAME_ID],
 		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, aserver,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &aserver->val_handles[ARC_DEVNAME_ID],
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_DEVNAME_ID],
 
 
 		GATT_OPT_CHR_UUID, &uuid[ARC_TARGET_ID],
 		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, aserver,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &aserver->val_handles[ARC_TARGET_ID],
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_TARGET_ID],
 
 		GATT_OPT_INVALID);
 
@@ -631,14 +663,14 @@ each_device (struct btd_device *device, void *data)
 }
 
 struct btd_device*
-find_device_for_object_path (ARCServer *aserver, const char *obj_path)
+find_device_for_object_path (ARCServer *self, const char *obj_path)
 {
 	CBData cbdata;
 
 	cbdata.obj_path = obj_path;
 	cbdata.device	= NULL;
 
-	btd_adapter_for_each_device (aserver->adapter, each_device, &cbdata);
+	btd_adapter_for_each_device (self->adapter, each_device, &cbdata);
 
 	return cbdata.device;
 }
@@ -646,7 +678,7 @@ find_device_for_object_path (ARCServer *aserver, const char *obj_path)
 
 
 static int
-chunked_attrib_db_update (ARCServer *aserver, GString *value, ARCID id)
+chunked_attrib_db_update (ARCServer *self, GString *value, ARCID id)
 {
 	int		 ret;
 	const unsigned	 chunksize = 20;
@@ -669,8 +701,8 @@ chunked_attrib_db_update (ARCServer *aserver, GString *value, ARCID id)
 		size = MIN(strlen(s), chunksize);
 
 		ret = attrib_db_update (
-			aserver->adapter,
-			aserver->val_handles[id],
+			self->adapter,
+			self->val_handles[id],
 			NULL,
 			(uint8_t*)s,
 			size,
@@ -698,7 +730,7 @@ chunked_attrib_db_update (ARCServer *aserver, GString *value, ARCID id)
 
 
 static DBusMessage*
-emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
+emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
 	DBusMessage		*reply;
 	const char		*event;
@@ -713,9 +745,9 @@ emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
 		return btd_error_invalid_args (msg);
 
 	/* server data */
-	g_string_assign (aserver->values[ARC_EVENT_ID], event);
+	g_string_assign (self->values[ARC_EVENT_ID], event);
 
-	ret = chunked_attrib_db_update (aserver, aserver->values[ARC_EVENT_ID],
+	ret = chunked_attrib_db_update (self, self->values[ARC_EVENT_ID],
 					ARC_EVENT_ID);
 	if (ret != 0)
 		DBG ("error writing event to GATT: %s", strerror(-ret));
@@ -731,7 +763,7 @@ emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
 
 
 static DBusMessage*
-submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
+submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
 	DBusMessage		*reply;
 	const char		*target_path, *results;
@@ -750,36 +782,36 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver
 	if (!rv)
 		return btd_error_invalid_args (msg);
 
-	device = find_device_for_object_path (aserver, target_path);
+	device = find_device_for_object_path (self, target_path);
 	if (!device)
  		return btd_error_failed (msg, "could not find target");
 
-	DBG ("SUBMITTING RESULT '%s'", aserver->values[ARC_RESULT_ID]->str);
+	DBG ("SUBMITTING RESULT '%s'", self->values[ARC_RESULT_ID]->str);
 
 	ret = attrib_db_update (
-		aserver->adapter,
-		aserver->val_handles[ARC_RESULT_ID],
+		self->adapter,
+		self->val_handles[ARC_RESULT_ID],
 		NULL,
-		(uint8_t*)aserver->values[ARC_RESULT_ID]->str,
-		aserver->values[ARC_RESULT_ID]->len,
+		(uint8_t*)self->values[ARC_RESULT_ID]->str,
+		self->values[ARC_RESULT_ID]->len,
 		NULL);
 
 	/* target = batostr (target_addr); */
-	/* g_string_assign (aserver->values[ARC_TARGET_ID], target); */
+	/* g_string_assign (self->values[ARC_TARGET_ID], target); */
 	/* bt_free (target); */
 
-	/* ret = chunked_attrib_db_update (aserver, aserver->values[ARC_TARGET_ID], */
+	/* ret = chunked_attrib_db_update (self, self->values[ARC_TARGET_ID], */
 	/* 				ARC_TARGET_ID); */
 
 	if (ret != 0)
 		return btd_error_failed (msg, "gatt update failed (result)");
 
-	/* notify_devices (aserver, ARC_RESULT_ID); */
+	/* notify_devices (self, ARC_RESULT_ID); */
 
 	if (!(reply = dbus_message_new_method_return (msg)))
 		return btd_error_failed (msg, "error creating DBus reply");
 
-	/* notify_devices (aserver, ARC_TARGET_ID); */
+	/* notify_devices (self, ARC_TARGET_ID); */
 
 	dbus_message_append_args(reply, DBUS_TYPE_INVALID);
 
@@ -787,7 +819,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver
 }
 
 static DBusMessage*
-update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
+update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
 	DBusMessage	*reply;
 	const char	*name;
@@ -800,12 +832,12 @@ update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
 	if (!rv)
 		return btd_error_invalid_args (msg);
 
-	if (adapter_set_name (aserver->adapter, name) != 0)
+	if (adapter_set_name (self->adapter, name) != 0)
 		return btd_error_failed (msg, "updating adapter name failed");
 
 	/* server */
-	g_string_assign (aserver->values[ARC_DEVNAME_ID], name);
-	ret = chunked_attrib_db_update (aserver, aserver->values[ARC_DEVNAME_ID],
+	g_string_assign (self->values[ARC_DEVNAME_ID], name);
+	ret = chunked_attrib_db_update (self, self->values[ARC_DEVNAME_ID],
 					ARC_DEVNAME_ID);
 	if (ret != 0)
 		return btd_error_failed (msg, "gatt update failed (name)");
@@ -825,7 +857,7 @@ update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
  * advertising mode
  */
 static DBusMessage*
-enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *aserver)
+enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
 	DBusMessage	*reply;
 	gboolean	 enable, rv;
@@ -836,7 +868,7 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *as
 				    DBUS_TYPE_INVALID);
 
 	/* turning off advertising */
-	if (!enable_adv (aserver, enable)) {
+	if (!enable_adv (self, enable)) {
 		char	*blurb;
 		blurb = g_strdup_printf ("%sabling advertising failed",
 					 enable ? "en" : "dis");
@@ -890,11 +922,11 @@ ARC_SERVER_METHODS[] = {
 int
 arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)
 {
-	ARCServer *aserver;
+	ARCServer *self;
 
-	aserver	  = arc_server_new (adapter);
+	self	  = arc_server_new (adapter);
 
-	register_service (aserver);
+	register_service (self);
 
 	g_dbus_register_interface (btd_get_dbus_connection(),
 				   adapter_get_path (adapter),
@@ -902,10 +934,10 @@ arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)
 				   ARC_SERVER_METHODS,
 				   ARC_SERVER_SIGNALS,
 				   NULL, /* properties */
-				   aserver,
+				   self,
 				   NULL);
 
-	ARC_SERVERS = g_slist_prepend (ARC_SERVERS, aserver);
+	ARC_SERVERS = g_slist_prepend (ARC_SERVERS, self);
 
 	return 0;
 }
@@ -914,23 +946,23 @@ void
 arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 {
 	GSList		*cur;
-	ARCServer	*aserver;
+	ARCServer	*self;
 
-	aserver = find_arc_server (adapter);
-	if (!aserver)
+	self = find_arc_server (adapter);
+	if (!self)
 		return;
 
 	g_dbus_unregister_interface(btd_get_dbus_connection(),
 				    adapter_get_path (adapter),
 				    ARC_SERVER_IFACE);
 
-	arc_server_destroy (aserver);
+	arc_server_destroy (self);
 }
 
 
 
 static gboolean
-enable_adv (ARCServer *aserver, gboolean enable)
+enable_adv (ARCServer *self, gboolean enable)
 {
 	gboolean				 rv;
 	struct hci_dev_info			 devinfo;
@@ -939,9 +971,9 @@ enable_adv (ARCServer *aserver, gboolean enable)
 
 	hcidev = hcisock = -1;
 
-	DBG ("attempt to enable advertising");
+	DBG ("attempt to %sable advertising", enable ? "en" : "dis");
 
-	devinfo.dev_id = btd_adapter_get_index (aserver->adapter);
+	devinfo.dev_id = btd_adapter_get_index (self->adapter);
 	if (devinfo.dev_id == MGMT_INDEX_NONE) {
 		error ("can't get adapter index");
 		return FALSE;
@@ -974,19 +1006,20 @@ enable_adv (ARCServer *aserver, gboolean enable)
 		goto leave;
 	}
 
-	if (!hci_set_adv_params (hcidev)) {
+	if (enable && !hci_set_adv_params (hcidev)) {
 		error ("failed to set advertising parameters");
 		goto leave;
 	}
 
-	if (!hci_adv_arc (hcidev)) {
+	if (enable && !hci_adv_arc (btd_adapter_get_name (self->adapter),
+			  hcidev)) {
 		error ("failed to advertise ARC");
 		goto leave;
 	}
 
 	if (!hci_set_adv_enable (hcidev, enable)) {
-		error ("failed to %s advertising",
-		       enable ? "enable" : "disable");
+		error ("failed to %sable advertising",
+		       enable ? "en" : "dis");
 		goto leave;
 	}
 
