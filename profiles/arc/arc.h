@@ -77,10 +77,4 @@ const char* arc_id_to_prop (ARCID id) G_GNUC_CONST;
 
 G_END_DECLS
 
-
-/* Local Variables:  */
-/* compile-command: "cd ../..; make" */
-/* End:              */
-
-
 #endif /* __ARC_H__ */

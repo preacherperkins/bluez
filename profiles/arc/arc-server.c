@@ -353,8 +353,6 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 }
 
 
-
-
 static void
 handle_blob (ARCServer *self, struct attribute *attr,
 	     struct btd_device *device, ARCID id)
