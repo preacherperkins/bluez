@@ -152,7 +152,7 @@ src_bluetoothd_SOURCES = $(builtin_sources) \
 			src/shared/util.h src/shared/util.c \
 			src/shared/mgmt.h src/shared/mgmt.c
 src_bluetoothd_LDADD = lib/libbluetooth-internal.la gdbus/libgdbus-internal.la \
-			@GLIB_LIBS@ @DBUS_LIBS@ @RT_LIBS@ -ldl
+			@GLIB_LIBS@ @DBUS_LIBS@ -ldl
 src_bluetoothd_LDFLAGS = $(AM_LDFLAGS) -Wl,--export-dynamic \
 				-Wl,--version-script=$(srcdir)/src/bluetooth.ver
 
