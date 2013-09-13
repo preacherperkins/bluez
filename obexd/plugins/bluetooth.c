@@ -185,6 +185,14 @@ static const GDBusMethodTable profile_methods[] = {
 	{ }
 };
 
+static void unregister_profile(struct bluetooth_profile *profile)
+{
+	g_dbus_unregister_interface(connection, profile->path,
+						"org.bluez.Profile1");
+	g_free(profile->path);
+	profile->path = NULL;
+}
+
 static void register_profile_reply(DBusPendingCall *call, void *user_data)
 {
 	struct bluetooth_profile *profile = user_data;
@@ -198,22 +206,13 @@ static void register_profile_reply(DBusPendingCall *call, void *user_data)
 		goto done;
 	}
 
-	g_free(profile->path);
-	profile->path = NULL;
+	unregister_profile(profile);
 
 	error("bluetooth: RequestProfile error: %s, %s", derr.name,
 								derr.message);
 	dbus_error_free(&derr);
 done:
 	dbus_message_unref(reply);
-}
-
-static void unregister_profile(struct bluetooth_profile *profile)
-{
-	g_dbus_unregister_interface(connection, profile->path,
-						"org.bluez.Profile1");
-	g_free(profile->path);
-	profile->path = NULL;
 }
 
 static void profile_free(void *data)
@@ -317,7 +316,7 @@ static int register_profile(struct bluetooth_profile *profile)
 	}
 	dbus_message_iter_close_container(&iter, &opt);
 
-	if (!dbus_connection_send_with_reply(connection, msg, &call, -1)) {
+	if (!g_dbus_send_message_with_reply(connection, msg, &call, -1)) {
 		ret = -1;
 		unregister_profile(profile);
 		goto failed;

@@ -649,6 +649,19 @@ struct bt_hci_cmd_write_page_scan_activity {
 	uint16_t window;
 } __attribute__ ((packed));
 
+#define BT_HCI_CMD_READ_INQUIRY_SCAN_ACTIVITY	0x0c1d
+struct bt_hci_rsp_read_inquiry_scan_activity {
+	uint8_t  status;
+	uint16_t interval;
+	uint16_t window;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_INQUIRY_SCAN_ACTIVITY	0x0c1e
+struct bt_hci_cmd_write_inquiry_scan_activity {
+	uint16_t interval;
+	uint16_t window;
+} __attribute__ ((packed));
+
 #define BT_HCI_CMD_READ_AUTH_ENABLE		0x0c1f
 struct bt_hci_rsp_read_auth_enable {
 	uint8_t  status;
@@ -658,6 +671,17 @@ struct bt_hci_rsp_read_auth_enable {
 #define BT_HCI_CMD_WRITE_AUTH_ENABLE		0x0c20
 struct bt_hci_cmd_write_auth_enable {
 	uint8_t  enable;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_ENCRYPT_MODE		0x0c21
+struct bt_hci_rsp_read_encrypt_mode {
+	uint8_t  status;
+	uint8_t  mode;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_ENCRYPT_MODE		0x0c22
+struct bt_hci_cmd_write_encrypt_mode {
+	uint8_t  mode;
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_READ_CLASS_OF_DEV		0x0c23
@@ -680,6 +704,66 @@ struct bt_hci_rsp_read_voice_setting {
 #define BT_HCI_CMD_WRITE_VOICE_SETTING		0x0c26
 struct bt_hci_cmd_write_voice_setting {
 	uint16_t setting;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_HOST_BUFFER_SIZE		0x0c33
+struct bt_hci_cmd_host_buffer_size {
+	uint16_t acl_mtu;
+	uint8_t  sco_mtu;
+	uint16_t acl_max_pkt;
+	uint16_t sco_max_pkt;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_LINK_SUPV_TIMEOUT	0x0c36
+struct bt_hci_cmd_read_link_supv_timeout {
+	uint16_t handle;
+} __attribute__ ((packed));
+struct bt_hci_rsp_read_link_supv_timeout {
+	uint8_t  status;
+	uint16_t handle;
+	uint16_t timeout;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_LINK_SUPV_TIMEOUT	0x0c37
+struct bt_hci_cmd_write_link_supv_timeout {
+	uint16_t handle;
+	uint16_t timeout;
+} __attribute__ ((packed));
+struct bt_hci_rsp_write_link_supv_timeout {
+	uint8_t  status;
+	uint16_t handle;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_NUM_SUPPORTED_IAC	0x0c38
+struct bt_hci_rsp_read_num_supported_iac {
+	uint8_t  status;
+	uint8_t  num_iac;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_CURRENT_IAC_LAP		0x0c39
+
+#define BT_HCI_CMD_WRITE_CURRENT_IAC_LAP	0x0c3a
+
+#define BT_HCI_CMD_READ_PAGE_SCAN_PERIOD_MODE	0x0c3b
+struct bt_hci_rsp_read_page_scan_period_mode {
+	uint8_t  status;
+	uint8_t  mode;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_PAGE_SCAN_PERIOD_MODE	0x0c3c
+struct bt_hci_cmd_write_page_scan_period_mode {
+	uint8_t  mode;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_PAGE_SCAN_MODE		0x0c3d
+struct bt_hci_rsp_read_page_scan_mode {
+	uint8_t  status;
+	uint8_t  mode;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_PAGE_SCAN_MODE		0x0c3e
+struct bt_hci_cmd_write_page_scan_mode {
+	uint8_t  mode;
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_SET_AFH_HOST_CLASSIFICATION	0x0c3f
@@ -983,6 +1067,8 @@ struct bt_hci_rsp_write_remote_amp_assoc {
 	uint8_t  status;
 	uint8_t  phy_handle;
 } __attribute__ ((packed));
+
+#define BT_HCI_CMD_ENABLE_DUT_MODE		0x1803
 
 #define BT_HCI_CMD_LE_SET_EVENT_MASK		0x2001
 struct bt_hci_cmd_le_set_event_mask {

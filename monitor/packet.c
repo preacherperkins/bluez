@@ -488,6 +488,44 @@ static void print_iac(const uint8_t *lap)
 						lap[2], lap[1], lap[0], str);
 }
 
+static void print_auth_enable(uint8_t enable)
+{
+	const char *str;
+
+	switch (enable) {
+	case 0x00:
+		str = "Authentication not required";
+		break;
+	case 0x01:
+		str = "Authentication required for all connections";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Enable: %s (0x%2.2x)", str, enable);
+}
+
+static void print_encrypt_mode(uint8_t mode)
+{
+	const char *str;
+
+	switch (mode) {
+	case 0x00:
+		str = "Encryption not required";
+		break;
+	case 0x01:
+		str = "Encryption required for all connections";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Mode: %s (0x%2.2x)", str, mode);
+}
+
 static const struct {
 	uint8_t bit;
 	const char *str;
@@ -2977,10 +3015,85 @@ static void set_event_mask_cmd(const void *data, uint8_t size)
 static void set_event_filter_cmd(const void *data, uint8_t size)
 {
 	uint8_t type = *((const uint8_t *) data);
+	uint8_t filter;
+	const char *str;
 
-	print_field("Type: 0x%2.2x", type);
+	switch (type) {
+	case 0x00:
+		str = "Clear All Filters";
+		break;
+	case 0x01:
+		str = "Inquiry Result";
+		break;
+	case 0x02:
+		str = "Connection Setup";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
 
-	packet_hexdump(data + 1, size - 1);
+	print_field("Type: %s (0x%2.2x)", str, type);
+
+	switch (type) {
+	case 0x00:
+		if (size > 1) {
+			print_text(COLOR_ERROR, "  invalid parameter size");
+			packet_hexdump(data + 1, size - 1);
+		}
+		break;
+
+	case 0x01:
+		filter = *((const uint8_t *) (data + 1));
+
+		switch (filter) {
+		case 0x00:
+			str = "Return responses from all devices";
+			break;
+		case 0x01:
+			str = "Device with specific Class of Device";
+			break;
+		case 0x02:
+			str = "Device with specific BD_ADDR";
+			break;
+		default:
+			str = "Reserved";
+			break;
+		}
+
+		print_field("Filter: %s (0x%2.2x)", str, filter);
+		packet_hexdump(data + 2, size - 2);
+		break;
+
+	case 0x02:
+		filter = *((const uint8_t *) (data + 1));
+
+		switch (filter) {
+		case 0x00:
+			str = "Allow connections all devices";
+			break;
+		case 0x01:
+			str = "Allow connections with specific Class of Device";
+			break;
+		case 0x02:
+			str = "Allow connections with specific BD_ADDR";
+			break;
+		default:
+			str = "Reserved";
+			break;
+		}
+
+		print_field("Filter: %s (0x%2.2x)", str, filter);
+		packet_hexdump(data + 2, size - 2);
+		break;
+
+	default:
+		filter = *((const uint8_t *) (data + 1));
+
+		print_field("Filter: Reserved (0x%2.2x)", filter);
+		packet_hexdump(data + 2, size - 2);
+		break;
+	}
 }
 
 static void flush_cmd(const void *data, uint8_t size)
@@ -3140,6 +3253,53 @@ static void write_page_scan_activity_cmd(const void *data, uint8_t size)
 	print_window(cmd->window);
 }
 
+static void read_inquiry_scan_activity_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_inquiry_scan_activity *rsp = data;
+
+	print_status(rsp->status);
+	print_interval(rsp->interval);
+	print_window(rsp->window);
+}
+
+static void write_inquiry_scan_activity_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_inquiry_scan_activity *cmd = data;
+
+	print_interval(cmd->interval);
+	print_window(cmd->window);
+}
+
+static void read_auth_enable_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_auth_enable *rsp = data;
+
+	print_status(rsp->status);
+	print_auth_enable(rsp->enable);
+}
+
+static void write_auth_enable_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_auth_enable *cmd = data;
+
+	print_auth_enable(cmd->enable);
+}
+
+static void read_encrypt_mode_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_encrypt_mode *rsp = data;
+
+	print_status(rsp->status);
+	print_encrypt_mode(rsp->mode);
+}
+
+static void write_encrypt_mode_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_encrypt_mode *cmd = data;
+
+	print_encrypt_mode(cmd->mode);
+}
+
 static void read_class_of_dev_rsp(const void *data, uint8_t size)
 {
 	const struct bt_hci_rsp_read_class_of_dev *rsp = data;
@@ -3168,6 +3328,86 @@ static void write_voice_setting_cmd(const void *data, uint8_t size)
 	const struct bt_hci_cmd_write_voice_setting *cmd = data;
 
 	print_voice_setting(cmd->setting);
+}
+
+static void host_buffer_size_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_host_buffer_size *cmd = data;
+
+	print_field("ACL MTU: %-4d ACL max packet: %d",
+				btohs(cmd->acl_mtu), btohs(cmd->acl_max_pkt));
+	print_field("SCO MTU: %-4d SCO max packet: %d",
+				cmd->sco_mtu, btohs(cmd->sco_max_pkt));
+}
+
+static void read_link_supv_timeout_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_read_link_supv_timeout *cmd = data;
+
+	print_handle(cmd->handle);
+}
+
+static void read_link_supv_timeout_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_link_supv_timeout *rsp = data;
+
+	print_status(rsp->status);
+	print_handle(rsp->handle);
+	print_timeout(rsp->timeout);
+}
+
+static void write_link_supv_timeout_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_link_supv_timeout *cmd = data;
+
+	print_handle(cmd->handle);
+	print_timeout(cmd->timeout);
+}
+
+static void write_link_supv_timeout_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_write_link_supv_timeout *rsp = data;
+
+	print_status(rsp->status);
+	print_handle(rsp->handle);
+}
+
+static void read_num_supported_iac_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_num_supported_iac *rsp = data;
+
+	print_status(rsp->status);
+	print_field("Number of IAC: %d", rsp->num_iac);
+}
+
+static void read_page_scan_period_mode_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_page_scan_period_mode *rsp = data;
+
+	print_status(rsp->status);
+	print_pscan_period_mode(rsp->mode);
+}
+
+static void write_page_scan_period_mode_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_page_scan_period_mode *cmd = data;
+
+	print_pscan_period_mode(cmd->mode);
+}
+
+static void read_page_scan_mode_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_page_scan_mode *rsp = data;
+
+	print_status(rsp->status);
+	print_pscan_mode(rsp->mode);
+}
+
+static void write_page_scan_mode_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_page_scan_mode *cmd = data;
+
+	print_pscan_mode(cmd->mode);
 }
 
 static void set_afh_host_classification_cmd(const void *data, uint8_t size)
@@ -4238,8 +4478,8 @@ static const struct opcode_data opcode_table[] = {
 				read_link_policy_cmd, 2, true,
 				read_link_policy_rsp, 5, true },
 	{ 0x080d,  42, "Write Link Policy Settings",
-				write_link_policy_cmd, 2, true,
-				write_link_policy_rsp, 2, true },
+				write_link_policy_cmd, 4, true,
+				write_link_policy_rsp, 3, true },
 	{ 0x080e,  43, "Read Default Link Policy Settings",
 				null_cmd, 0, true,
 				read_default_link_policy_rsp, 3, true },
@@ -4313,12 +4553,24 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c1c,  65, "Write Page Scan Activity",
 				write_page_scan_activity_cmd, 4, true,
 				status_rsp, 1, true },
-	{ 0x0c1d,  66, "Read Inquiry Scan Activity" },
-	{ 0x0c1e,  67, "Write Inquiry Scan Activity" },
-	{ 0x0c1f,  68, "Read Authentication Enable" },
-	{ 0x0c20,  69, "Write Authentication Enable" },
-	{ 0x0c21,  70, "Read Encryption Mode" },
-	{ 0x0c22,  71, "Write Encryption Mode" },
+	{ 0x0c1d,  66, "Read Inquiry Scan Activity",
+				null_cmd, 0, true,
+				read_inquiry_scan_activity_rsp, 5, true },
+	{ 0x0c1e,  67, "Write Inquiry Scan Activity",
+				write_inquiry_scan_activity_cmd, 4, true,
+				status_rsp, 1, true },
+	{ 0x0c1f,  68, "Read Authentication Enable",
+				null_cmd, 0, true,
+				read_auth_enable_rsp, 2, true },
+	{ 0x0c20,  69, "Write Authentication Enable",
+				write_auth_enable_cmd, 1, true,
+				status_rsp, 1, true },
+	{ 0x0c21,  70, "Read Encryption Mode",
+				null_cmd, 0, true,
+				read_encrypt_mode_rsp, 2, true },
+	{ 0x0c22,  71, "Write Encryption Mode",
+				write_encrypt_mode_cmd, 1, true,
+				status_rsp, 1, true },
 	{ 0x0c23,  72, "Read Class of Device",
 				null_cmd, 0, true,
 				read_class_of_dev_rsp, 4, true },
@@ -4341,17 +4593,33 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c2e,  83, "Read Sync Flow Control Enable" },
 	{ 0x0c2f,  84, "Write Sync Flow Control Enable" },
 	{ 0x0c31,  85, "Set Host Controller To Host Flow" },
-	{ 0x0c33,  86, "Host Buffer Size" },
+	{ 0x0c33,  86, "Host Buffer Size",
+				host_buffer_size_cmd, 7, true,
+				status_rsp, 1, true },
 	{ 0x0c35,  87, "Host Number of Completed Packets" },
-	{ 0x0c36,  88, "Read Link Supervision Timeout" },
-	{ 0x0c37,  89, "Write Link Supervision Timeout" },
-	{ 0x0c38,  90, "Read Number of Supported IAC" },
+	{ 0x0c36,  88, "Read Link Supervision Timeout",
+				read_link_supv_timeout_cmd, 2, true,
+				read_link_supv_timeout_rsp, 5, true },
+	{ 0x0c37,  89, "Write Link Supervision Timeout",
+				write_link_supv_timeout_cmd, 4, true,
+				write_link_supv_timeout_rsp, 3, true },
+	{ 0x0c38,  90, "Read Number of Supported IAC",
+				null_cmd, 0, true,
+				read_num_supported_iac_rsp, 2, true },
 	{ 0x0c39,  91, "Read Current IAC LAP" },
 	{ 0x0c3a,  92, "Write Current IAC LAP" },
-	{ 0x0c3b,  93, "Read Page Scan Period Mode" },
-	{ 0x0c3c,  94, "Write Page Scan Period Mode" },
-	{ 0x0c3d,  95, "Read Page Scan Mode" },
-	{ 0x0c3e,  96, "Write Page Scan Mode" },
+	{ 0x0c3b,  93, "Read Page Scan Period Mode",
+				null_cmd, 0, true,
+				read_page_scan_period_mode_rsp, 2, true },
+	{ 0x0c3c,  94, "Write Page Scan Period Mode",
+				write_page_scan_period_mode_cmd, 1, true,
+				status_rsp, 1, true },
+	{ 0x0c3d,  95, "Read Page Scan Mode",
+				null_cmd, 0, true,
+				read_page_scan_mode_rsp, 2, true },
+	{ 0x0c3e,  96, "Write Page Scan Mode",
+				write_page_scan_mode_cmd, 1, true,
+				status_rsp, 1, true },
 	{ 0x0c3f,  97, "Set AFH Host Channel Classification",
 				set_afh_host_classification_cmd, 10, true,
 				status_rsp, 1, true },
@@ -4504,7 +4772,9 @@ static const struct opcode_data opcode_table[] = {
 	/* OGF 6 - Testing */
 	{ 0x1801, 128, "Read Loopback Mode" },
 	{ 0x1802, 129, "Write Loopback Mode" },
-	{ 0x1803, 130, "Enable Device Under Test Mode" },
+	{ 0x1803, 130, "Enable Device Under Test Mode",
+				null_cmd, 0, true,
+				status_rsp, 1, true },
 	{ 0x1804, 157, "Write Simple Pairing Debug Mode" },
 	{ 0x1807, 189, "Enable AMP Receiver Reports" },
 	{ 0x1808, 190, "AMP Test End" },

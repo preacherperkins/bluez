@@ -92,6 +92,8 @@ struct btdev {
 	uint16_t page_scan_window;
 	uint16_t page_scan_type;
 	uint8_t  auth_enable;
+	uint16_t inquiry_scan_interval;
+	uint16_t inquiry_scan_window;
 	uint8_t  inquiry_mode;
 	uint8_t  afh_assessment_mode;
 	uint8_t  ext_inquiry_fec;
@@ -248,6 +250,7 @@ static void set_common_commands_bredrle(struct btdev *btdev)
 {
 	btdev->commands[0]  |= 0x20;	/* Disconnect */
 	btdev->commands[2]  |= 0x80;	/* Read Remote Version Information */
+	btdev->commands[10] |= 0x40;	/* Host Buffer Size */
 	btdev->commands[15] |= 0x02;	/* Read BD ADDR */
 }
 
@@ -259,6 +262,7 @@ static void set_bredr_commands(struct btdev *btdev)
 	btdev->commands[0]  |= 0x01;	/* Inquiry */
 	btdev->commands[0]  |= 0x02;	/* Inquiry Cancel */
 	btdev->commands[0]  |= 0x10;	/* Create Connection */
+	btdev->commands[0]  |= 0x40;	/* Add SCO Connection */
 	btdev->commands[0]  |= 0x80;	/* Cancel Create Connection */
 	btdev->commands[1]  |= 0x01;	/* Accept Connection Request */
 	btdev->commands[1]  |= 0x02;	/* Reject Connection Request */
@@ -282,12 +286,15 @@ static void set_bredr_commands(struct btdev *btdev)
 	btdev->commands[7]  |= 0x80;	/* Write Scan Enable */
 	btdev->commands[8]  |= 0x01;	/* Read Page Scan Activity */
 	btdev->commands[8]  |= 0x02;	/* Write Page Scan Activity */
+	btdev->commands[8]  |= 0x04;	/* Read Inquiry Scan Activity */
+	btdev->commands[8]  |= 0x08;	/* Write Inquiry Scan Activity */
 	btdev->commands[8]  |= 0x10;	/* Read Authentication Enable */
 	btdev->commands[8]  |= 0x20;	/* Write Authentication Enable */
 	btdev->commands[9]  |= 0x01;	/* Read Class Of Device */
 	btdev->commands[9]  |= 0x02;	/* Write Class Of Device */
 	btdev->commands[9]  |= 0x04;	/* Read Voice Setting */
 	btdev->commands[9]  |= 0x08;	/* Write Voice Setting */
+	btdev->commands[11] |= 0x10;	/* Write Current IAC LAP */
 	btdev->commands[12] |= 0x40;	/* Read Inquiry Mode */
 	btdev->commands[12] |= 0x80;	/* Write Inquiry Mode */
 	btdev->commands[13] |= 0x01;	/* Read Page Scan Type */
@@ -296,10 +303,13 @@ static void set_bredr_commands(struct btdev *btdev)
 	btdev->commands[13] |= 0x08;	/* Write AFH Assess Mode */
 	btdev->commands[14] |= 0x40;	/* Read Local Extended Features */
 	btdev->commands[15] |= 0x01;	/* Read Country Code */
+	btdev->commands[16] |= 0x04;	/* Enable Device Under Test Mode */
+	btdev->commands[16] |= 0x08;	/* Setup Synchronous Connection */
 	btdev->commands[17] |= 0x01;	/* Read Extended Inquiry Response */
 	btdev->commands[17] |= 0x02;	/* Write Extended Inquiry Response */
 	btdev->commands[17] |= 0x20;	/* Read Simple Pairing Mode */
 	btdev->commands[17] |= 0x40;	/* Write Simple Pairing Mode */
+	btdev->commands[17] |= 0x80;	/* Read Local OOB Data */
 	btdev->commands[18] |= 0x01;	/* Read Inquiry Response TX Power */
 	btdev->commands[18] |= 0x02;	/* Write Inquiry Response TX Power */
 	btdev->commands[23] |= 0x04;	/* Read Data Block Size */
@@ -315,12 +325,18 @@ static void set_le_commands(struct btdev *btdev)
 	btdev->commands[25] |= 0x01;	/* LE Set Event Mask */
 	btdev->commands[25] |= 0x02;	/* LE Read Buffer Size */
 	btdev->commands[25] |= 0x04;	/* LE Read Local Features */
+	btdev->commands[25] |= 0x20;	/* LE Set Adv Parameters */
 	btdev->commands[25] |= 0x40;	/* LE Read Adv TX Power */
 	btdev->commands[25] |= 0x80;	/* LE Set Adv Data */
+	btdev->commands[26] |= 0x02;	/* LE Set Adv Enable */
 	btdev->commands[26] |= 0x04;	/* LE Set Scan Parameters */
 	btdev->commands[26] |= 0x08;	/* LE Set Scan Enable */
 	btdev->commands[26] |= 0x40;	/* LE Read White List Size */
+	btdev->commands[27] |= 0x80;	/* LE Rand */
 	btdev->commands[28] |= 0x08;	/* LE Read Supported States */
+	btdev->commands[28] |= 0x10;	/* LE Receiver Test */
+	btdev->commands[28] |= 0x20;	/* LE Transmitter Test */
+	btdev->commands[28] |= 0x40;	/* LE Test End */
 }
 
 static void set_bredrle_commands(struct btdev *btdev)
@@ -981,6 +997,7 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 	const struct bt_hci_cmd_write_page_timeout *wpt;
 	const struct bt_hci_cmd_write_scan_enable *wse;
 	const struct bt_hci_cmd_write_page_scan_activity *wpsa;
+	const struct bt_hci_cmd_write_inquiry_scan_activity *wisa;
 	const struct bt_hci_cmd_write_page_scan_type *wpst;
 	const struct bt_hci_cmd_write_auth_enable *wae;
 	const struct bt_hci_cmd_write_class_of_dev *wcod;
@@ -1005,6 +1022,7 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 	struct bt_hci_rsp_read_page_timeout rpt;
 	struct bt_hci_rsp_read_scan_enable rse;
 	struct bt_hci_rsp_read_page_scan_activity rpsa;
+	struct bt_hci_rsp_read_inquiry_scan_activity risa;
 	struct bt_hci_rsp_read_page_scan_type rpst;
 	struct bt_hci_rsp_read_auth_enable rae;
 	struct bt_hci_rsp_read_class_of_dev rcod;
@@ -1013,6 +1031,7 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 	struct bt_hci_rsp_read_afh_assessment_mode raam;
 	struct bt_hci_rsp_read_ext_inquiry_response reir;
 	struct bt_hci_rsp_read_simple_pairing_mode rspm;
+	struct bt_hci_rsp_read_local_oob_data rlod;
 	struct bt_hci_rsp_read_inquiry_resp_tx_power rirtp;
 	struct bt_hci_rsp_read_le_host_supported rlhs;
 	struct bt_hci_rsp_read_sync_train_params rstp;
@@ -1030,6 +1049,8 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 	struct bt_hci_rsp_le_read_adv_tx_power lratp;
 	struct bt_hci_rsp_le_read_supported_states lrss;
 	struct bt_hci_rsp_le_read_white_list_size lrwls;
+	struct bt_hci_rsp_le_rand lr;
+	struct bt_hci_rsp_le_test_end lte;
 	struct bt_hci_rsp_remote_name_request_cancel rnrc_rsp;
 	uint8_t status, page;
 
@@ -1256,6 +1277,25 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		cmd_complete(btdev, opcode, &status, sizeof(status));
 		break;
 
+	case BT_HCI_CMD_READ_INQUIRY_SCAN_ACTIVITY:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
+		risa.status = BT_HCI_ERR_SUCCESS;
+		risa.interval = cpu_to_le16(btdev->inquiry_scan_interval);
+		risa.window = cpu_to_le16(btdev->inquiry_scan_window);
+		cmd_complete(btdev, opcode, &risa, sizeof(risa));
+		break;
+
+	case BT_HCI_CMD_WRITE_INQUIRY_SCAN_ACTIVITY:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
+		wisa = data;
+		btdev->inquiry_scan_interval = le16_to_cpu(wisa->interval);
+		btdev->inquiry_scan_window = le16_to_cpu(wisa->window);
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
 	case BT_HCI_CMD_READ_PAGE_SCAN_TYPE:
 		if (btdev->type == BTDEV_TYPE_LE)
 			goto unsupported;
@@ -1320,6 +1360,18 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 			goto unsupported;
 		wvs = data;
 		btdev->voice_setting = le16_to_cpu(wvs->setting);
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_HOST_BUFFER_SIZE:
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_WRITE_CURRENT_IAC_LAP:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
 		status = BT_HCI_ERR_SUCCESS;
 		cmd_complete(btdev, opcode, &status, sizeof(status));
 		break;
@@ -1392,6 +1444,13 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		btdev->simple_pairing_mode = wspm->mode;
 		status = BT_HCI_ERR_SUCCESS;
 		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_READ_LOCAL_OOB_DATA:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
+		rlod.status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &rlod, sizeof(rlod));
 		break;
 
 	case BT_HCI_CMD_READ_INQUIRY_RESP_TX_POWER:
@@ -1641,7 +1700,7 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 	case BT_HCI_CMD_LE_READ_WHITE_LIST_SIZE:
 		if (btdev->type == BTDEV_TYPE_BREDR)
 			goto unsupported;
-		lrwls.status = 0;
+		lrwls.status = BT_HCI_ERR_SUCCESS;
 		lrwls.size = 0;
 		cmd_complete(btdev, opcode, &lrwls, sizeof(lrwls));
 		break;
@@ -1664,7 +1723,24 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		cmd_complete(btdev, opcode, &status, sizeof(status));
 		break;
 
+	case BT_HCI_CMD_LE_RAND:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			goto unsupported;
+		lr.status = BT_HCI_ERR_SUCCESS;
+		lr.number[0] = rand();
+		lr.number[1] = rand();
+		lr.number[2] = rand();
+		lr.number[3] = rand();
+		lr.number[4] = rand();
+		lr.number[5] = rand();
+		lr.number[6] = rand();
+		lr.number[7] = rand();
+		cmd_complete(btdev, opcode, &lr, sizeof(lr));
+		break;
+
 	case BT_HCI_CMD_SETUP_SYNC_CONN:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
 		ssc = data;
 		status = BT_HCI_ERR_SUCCESS;
 		cmd_status(btdev, BT_HCI_ERR_SUCCESS, opcode);
@@ -1673,7 +1749,36 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		break;
 
 	case BT_HCI_CMD_ADD_SCO_CONN:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
 		sco_conn_complete(btdev, BT_HCI_ERR_SUCCESS);
+		break;
+
+	case BT_HCI_CMD_ENABLE_DUT_MODE:
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_LE_RECEIVER_TEST:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			goto unsupported;
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_LE_TRANSMITTER_TEST:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			goto unsupported;
+		status = BT_HCI_ERR_SUCCESS;
+		cmd_complete(btdev, opcode, &status, sizeof(status));
+		break;
+
+	case BT_HCI_CMD_LE_TEST_END:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			goto unsupported;
+		lte.status = BT_HCI_ERR_SUCCESS;
+		lte.num_packets = 0;
+		cmd_complete(btdev, opcode, &lte, sizeof(lte));
 		break;
 
 	default:

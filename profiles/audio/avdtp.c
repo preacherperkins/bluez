@@ -33,15 +33,12 @@
 #include <errno.h>
 #include <unistd.h>
 #include <assert.h>
-#include <signal.h>
-#include <netinet/in.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
 #include <glib.h>
-#include <dbus/dbus.h>
 #include <btio/btio.h>
 
 #include "log.h"
@@ -50,7 +47,6 @@
 #include "src/adapter.h"
 #include "src/device.h"
 
-#include "control.h"
 #include "avdtp.h"
 #include "sink.h"
 #include "source.h"
@@ -90,7 +86,6 @@
 #define REQ_TIMEOUT 6
 #define ABORT_TIMEOUT 2
 #define DISCONNECT_TIMEOUT 1
-#define STREAM_TIMEOUT 20
 #define START_TIMEOUT 1
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
@@ -426,8 +421,6 @@ struct avdtp {
 
 	/* Attempt stream setup instead of disconnecting */
 	gboolean stream_setup;
-
-	DBusPendingCall *pending_auth;
 };
 
 static GSList *servers = NULL;
@@ -2325,12 +2318,8 @@ static struct avdtp *avdtp_get_internal(struct btd_device *device)
 		return NULL;
 
 	session = find_session(server->sessions, device);
-	if (session) {
-		if (session->pending_auth)
-			return NULL;
-		else
-			return session;
-	}
+	if (session)
+		return session;
 
 	session = g_new0(struct avdtp, 1);
 
