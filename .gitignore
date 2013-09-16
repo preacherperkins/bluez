@@ -100,3 +100,6 @@ unit/test-gobex-transfer
 unit/test-*.log
 unit/test-*.trs
 
+/GPATH
+/GRTAGS
+/GTAGS
