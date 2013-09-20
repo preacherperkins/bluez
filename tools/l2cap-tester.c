@@ -167,7 +167,7 @@ static void read_index_list_callback(uint8_t status, uint16_t length,
 	mgmt_register(data->mgmt, MGMT_EV_INDEX_REMOVED, MGMT_INDEX_NONE,
 					index_removed_callback, NULL, NULL);
 
-	data->hciemu = hciemu_new(HCIEMU_TYPE_BREDRLE);
+	data->hciemu = hciemu_new(data->hciemu_type);
 	if (!data->hciemu) {
 		tester_warn("Failed to setup HCI emulation");
 		tester_pre_setup_failed();
@@ -262,12 +262,39 @@ static const struct l2cap_server_data l2cap_server_nval_psm_test = {
 };
 
 static const uint8_t l2cap_nval_conn_req[] = { 0x00 };
+static const uint8_t l2cap_nval_pdu_rsp[] = { 0x00, 0x00 };
 
 static const struct l2cap_server_data l2cap_server_nval_pdu_test1 = {
 	.send_req_code = BT_L2CAP_PDU_CONN_REQ,
 	.send_req = l2cap_nval_conn_req,
 	.send_req_len = sizeof(l2cap_nval_conn_req),
 	.expect_rsp_code = BT_L2CAP_PDU_CMD_REJECT,
+	.expect_rsp = l2cap_nval_pdu_rsp,
+	.expect_rsp_len = sizeof(l2cap_nval_pdu_rsp),
+};
+
+static const uint8_t l2cap_nval_dc_req[] = { 0x12, 0x34, 0x56, 0x78 };
+static const uint8_t l2cap_nval_cid_rsp[] = { 0x02, 0x00 };
+
+static const struct l2cap_server_data l2cap_server_nval_cid_test1 = {
+	.send_req_code = BT_L2CAP_PDU_DISCONN_REQ,
+	.send_req = l2cap_nval_dc_req,
+	.send_req_len = sizeof(l2cap_nval_dc_req),
+	.expect_rsp_code = BT_L2CAP_PDU_CMD_REJECT,
+	.expect_rsp = l2cap_nval_cid_rsp,
+	.expect_rsp_len = sizeof(l2cap_nval_cid_rsp),
+};
+
+static const uint8_t l2cap_nval_cfg_req[] = { 0x12, 0x34, 0x00, 0x00 };
+static const uint8_t l2cap_nval_cfg_rsp[] = { 0x02, 0x00 };
+
+static const struct l2cap_server_data l2cap_server_nval_cid_test2 = {
+	.send_req_code = BT_L2CAP_PDU_CONFIG_REQ,
+	.send_req = l2cap_nval_cfg_req,
+	.send_req_len = sizeof(l2cap_nval_cfg_req),
+	.expect_rsp_code = BT_L2CAP_PDU_CMD_REJECT,
+	.expect_rsp = l2cap_nval_cfg_rsp,
+	.expect_rsp_len = sizeof(l2cap_nval_cfg_rsp),
 };
 
 static void client_connectable_complete(uint16_t opcode, uint8_t status,
@@ -553,7 +580,7 @@ static void client_new_conn(uint16_t handle, void *user_data)
 		tester_print("Sending L2CAP Request from client");
 
 		bthost = hciemu_client_get_host(data->hciemu);
-		bthost_l2cap_req(bthost, handle, BT_L2CAP_PDU_CONN_REQ,
+		bthost_l2cap_req(bthost, handle, l2data->send_req_code,
 					l2data->send_req, l2data->send_req_len,
 					cb, data);
 	}
@@ -625,6 +652,12 @@ int main(int argc, char *argv[])
 					setup_powered, test_bredr_server);
 	test_l2cap("L2CAP BR/EDR Server - Invalid PDU",
 				&l2cap_server_nval_pdu_test1, setup_powered,
+				test_bredr_server);
+	test_l2cap("L2CAP BR/EDR Server - Invalid Disconnect CID",
+				&l2cap_server_nval_cid_test1, setup_powered,
+				test_bredr_server);
+	test_l2cap("L2CAP BR/EDR Server - Invalid Config CID",
+				&l2cap_server_nval_cid_test2, setup_powered,
 				test_bredr_server);
 
 	return tester_run();

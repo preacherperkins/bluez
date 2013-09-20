@@ -95,10 +95,14 @@ static const char * const filter_list[] = {
 
 struct map_data {
 	struct obc_session *session;
-	DBusMessage *msg;
 	GHashTable *messages;
 	int16_t mas_instance_id;
 	uint8_t supported_message_types;
+};
+
+struct pending_request {
+	struct map_data *map;
+	DBusMessage *msg;
 };
 
 #define MAP_MSG_FLAG_PRIORITY	0x01
@@ -128,28 +132,47 @@ struct map_msg {
 };
 
 struct map_parser {
-	struct map_data *data;
+	struct pending_request *request;
 	DBusMessageIter *iter;
 };
 
 static DBusConnection *conn = NULL;
 
+static struct pending_request *pending_request_new(struct map_data *map,
+							DBusMessage *message)
+{
+	struct pending_request *p;
+
+	p = g_new0(struct pending_request, 1);
+	p->map = map;
+	p->msg = dbus_message_ref(message);
+
+	return p;
+}
+
+static void pending_request_free(struct pending_request *p)
+{
+	dbus_message_unref(p->msg);
+
+	g_free(p);
+}
+
 static void simple_cb(struct obc_session *session,
 						struct obc_transfer *transfer,
 						GError *err, void *user_data)
 {
+	struct pending_request *request = user_data;
 	DBusMessage *reply;
-	struct map_data *map = user_data;
 
 	if (err != NULL)
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"%s", err->message);
 	else
-		reply = dbus_message_new_method_return(map->msg);
+		reply = dbus_message_new_method_return(request->msg);
 
 	g_dbus_send_message(conn, reply);
-	dbus_message_unref(map->msg);
+	pending_request_free(request);
 }
 
 static DBusMessage *map_setpath(DBusConnection *connection,
@@ -157,6 +180,7 @@ static DBusMessage *map_setpath(DBusConnection *connection,
 {
 	struct map_data *map = user_data;
 	const char *folder;
+	struct pending_request *request;
 	GError *err = NULL;
 
 	if (dbus_message_get_args(message, NULL, DBUS_TYPE_STRING, &folder,
@@ -165,17 +189,18 @@ static DBusMessage *map_setpath(DBusConnection *connection,
 					ERROR_INTERFACE ".InvalidArguments",
 					NULL);
 
-	obc_session_setpath(map->session, folder, simple_cb, map, &err);
+	request = pending_request_new(map, message);
+
+	obc_session_setpath(map->session, folder, simple_cb, request, &err);
 	if (err != NULL) {
 		DBusMessage *reply;
 		reply =  g_dbus_create_error(message,
 						ERROR_INTERFACE ".Failed",
 						"%s", err->message);
 		g_error_free(err);
+		pending_request_free(request);
 		return reply;
 	}
-
-	map->msg = dbus_message_ref(message);
 
 	return NULL;
 }
@@ -217,7 +242,7 @@ static void folder_listing_cb(struct obc_session *session,
 						struct obc_transfer *transfer,
 						GError *err, void *user_data)
 {
-	struct map_data *map = user_data;
+	struct pending_request *request = user_data;
 	GMarkupParseContext *ctxt;
 	DBusMessage *reply;
 	DBusMessageIter iter, array;
@@ -226,7 +251,7 @@ static void folder_listing_cb(struct obc_session *session,
 	int perr;
 
 	if (err != NULL) {
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"%s", err->message);
 		goto done;
@@ -234,14 +259,14 @@ static void folder_listing_cb(struct obc_session *session,
 
 	perr = obc_transfer_get_contents(transfer, &contents, &size);
 	if (perr < 0) {
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"Error reading contents: %s",
 						strerror(-perr));
 		goto done;
 	}
 
-	reply = dbus_message_new_method_return(map->msg);
+	reply = dbus_message_new_method_return(request->msg);
 	if (reply == NULL)
 		return;
 
@@ -259,13 +284,14 @@ static void folder_listing_cb(struct obc_session *session,
 
 done:
 	g_dbus_send_message(conn, reply);
-	dbus_message_unref(map->msg);
+	pending_request_free(request);
 }
 
 static DBusMessage *get_folder_listing(struct map_data *map,
 							DBusMessage *message,
 							GObexApparam *apparam)
 {
+	struct pending_request *request;
 	struct obc_transfer *transfer;
 	GError *err = NULL;
 	DBusMessage *reply;
@@ -278,11 +304,15 @@ static DBusMessage *get_folder_listing(struct map_data *map,
 
 	obc_transfer_set_apparam(transfer, apparam);
 
-	if (obc_session_queue(map->session, transfer, folder_listing_cb, map,
-								&err)) {
-		map->msg = dbus_message_ref(message);
-		return NULL;
+	request = pending_request_new(map, message);
+
+	if (!obc_session_queue(map->session, transfer, folder_listing_cb,
+							request, &err)) {
+		pending_request_free(request);
+		goto fail;
 	}
+
+	return NULL;
 
 fail:
 	reply = g_dbus_create_error(message, ERROR_INTERFACE ".Failed", "%s",
@@ -1051,7 +1081,7 @@ static void msg_element(GMarkupParseContext *ctxt, const char *element,
 				gpointer user_data, GError **gerr)
 {
 	struct map_parser *parser = user_data;
-	struct map_data *data = parser->data;
+	struct map_data *data = parser->request->map;
 	DBusMessageIter entry, *iter = parser->iter;
 	struct map_msg *msg;
 	const char *key;
@@ -1106,7 +1136,7 @@ static void message_listing_cb(struct obc_session *session,
 						struct obc_transfer *transfer,
 						GError *err, void *user_data)
 {
-	struct map_data *map = user_data;
+	struct pending_request *request = user_data;
 	struct map_parser *parser;
 	GMarkupParseContext *ctxt;
 	DBusMessage *reply;
@@ -1116,7 +1146,7 @@ static void message_listing_cb(struct obc_session *session,
 	int perr;
 
 	if (err != NULL) {
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"%s", err->message);
 		goto done;
@@ -1124,14 +1154,14 @@ static void message_listing_cb(struct obc_session *session,
 
 	perr = obc_transfer_get_contents(transfer, &contents, &size);
 	if (perr < 0) {
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"Error reading contents: %s",
 						strerror(-perr));
 		goto done;
 	}
 
-	reply = dbus_message_new_method_return(map->msg);
+	reply = dbus_message_new_method_return(request->msg);
 	if (reply == NULL)
 		return;
 
@@ -1148,7 +1178,7 @@ static void message_listing_cb(struct obc_session *session,
 					&array);
 
 	parser = g_new(struct map_parser, 1);
-	parser->data = map;
+	parser->request = request;
 	parser->iter = &array;
 
 	ctxt = g_markup_parse_context_new(&msg_parser, 0, parser, NULL);
@@ -1160,7 +1190,7 @@ static void message_listing_cb(struct obc_session *session,
 
 done:
 	g_dbus_send_message(conn, reply);
-	dbus_message_unref(map->msg);
+	pending_request_free(request);
 }
 
 static DBusMessage *get_message_listing(struct map_data *map,
@@ -1168,6 +1198,7 @@ static DBusMessage *get_message_listing(struct map_data *map,
 							const char *folder,
 							GObexApparam *apparam)
 {
+	struct pending_request *request;
 	struct obc_transfer *transfer;
 	GError *err = NULL;
 	DBusMessage *reply;
@@ -1180,11 +1211,15 @@ static DBusMessage *get_message_listing(struct map_data *map,
 
 	obc_transfer_set_apparam(transfer, apparam);
 
-	if (obc_session_queue(map->session, transfer, message_listing_cb, map,
-								&err)) {
-		map->msg = dbus_message_ref(message);
-		return NULL;
+	request = pending_request_new(map, message);
+
+	if (!obc_session_queue(map->session, transfer, message_listing_cb,
+							request, &err)) {
+		pending_request_free(request);
+		goto fail;
 	}
+
+	return NULL;
 
 fail:
 	reply = g_dbus_create_error(message, ERROR_INTERFACE ".Failed", "%s",
@@ -1523,21 +1558,21 @@ static void update_inbox_cb(struct obc_session *session,
 				struct obc_transfer *transfer,
 				GError *err, void *user_data)
 {
-	struct map_data *map = user_data;
+	struct pending_request *request = user_data;
 	DBusMessage *reply;
 
 	if (err != NULL) {
-		reply = g_dbus_create_error(map->msg,
+		reply = g_dbus_create_error(request->msg,
 						ERROR_INTERFACE ".Failed",
 						"%s", err->message);
 		goto done;
 	}
 
-	reply = dbus_message_new_method_return(map->msg);
+	reply = dbus_message_new_method_return(request->msg);
 
 done:
 	g_dbus_send_message(conn, reply);
-	dbus_message_unref(map->msg);
+	pending_request_free(request);
 }
 
 static DBusMessage *map_update_inbox(DBusConnection *connection,
@@ -1548,6 +1583,7 @@ static DBusMessage *map_update_inbox(DBusConnection *connection,
 	char contents[2];
 	struct obc_transfer *transfer;
 	GError *err = NULL;
+	struct pending_request *request;
 
 	contents[0] = FILLER_BYTE;
 	contents[1] = '\0';
@@ -1558,11 +1594,13 @@ static DBusMessage *map_update_inbox(DBusConnection *connection,
 	if (transfer == NULL)
 		goto fail;
 
-	if (!obc_session_queue(map->session, transfer, update_inbox_cb,
-								map, &err))
-		goto fail;
+	request = pending_request_new(map, message);
 
-	map->msg = dbus_message_ref(message);
+	if (!obc_session_queue(map->session, transfer, update_inbox_cb,
+							request, &err)) {
+		pending_request_free(request);
+		goto fail;
+	}
 
 	return NULL;
 
