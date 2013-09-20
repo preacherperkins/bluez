@@ -66,10 +66,7 @@ static GSList *ARC_SERVERS = NULL;
 
 typedef struct  {
 	struct btd_adapter	*adapter;
-	uint16_t		 handles[ARC_ID_NUM];
-	uint16_t		 val_handles[ARC_ID_NUM];
-	GString                  *values[ARC_ID_NUM];
-
+	GHashTable		*char_table;
 	guint		adv_id, disc_id;
 	gboolean	writing_result;
 
@@ -124,10 +121,8 @@ arc_server_new (struct btd_adapter *adapter)
 	unsigned	 u;
 
 	self		 = g_new0 (ARCServer, 1);
-	self->adapter = adapter;
-
-	for (u = 0; u != ARC_ID_NUM; ++u)
-		self->values[u] = g_string_sized_new (20);
+	self->adapter	 = adapter;
+	self->char_table = arc_char_table_new ();
 
 	/*
 	 * we need the mgmt interface to be able to get the
@@ -154,15 +149,15 @@ arc_server_destroy (ARCServer *self)
 	if (!self)
 		return;
 
-	for (u = 0; u != ARC_ID_NUM; ++u)
-		g_string_free (self->values[u], TRUE);
-
 	ARC_SERVERS = g_slist_remove (ARC_SERVERS, self);
 
 	if (self->adv_id != 0) {
 		g_source_remove (self->adv_id);
 		self->adv_id = 0;
 	}
+
+	if (self->char_table)
+		g_hash_table_destroy (self->char_table);
 
 	mgmt_unref (self->mgmt);
 	g_free (self);
@@ -355,30 +350,42 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 
 static void
 handle_blob (ARCServer *self, struct attribute *attr,
-	     struct btd_device *device, ARCID id)
+	     struct btd_device *device, ARCChar *achar)
 {
-	if (id == ARC_REQUEST_ID) {
+	if (g_strcmp0 (achar->uuid, ARC_REQUEST_UUID) == 0) {
 
 		int		 ret;
 		char		*str;
 		const char	*objpath;
 		const char	*empty;
+		ARCChar		*result_char;
+		char		*request;
+
+		/* make sure it's valid utf8 */
+		if (!g_utf8_validate (
+			    (const char*)achar->val->data,
+			    achar->val->len, NULL)) {
+			error ("request is not valid utf8");
+			return;
+		}
 
 		objpath = device_get_path (device);
 
 		/* when processing the current method, clear any
 		 * existing result */
 		DBG ("clearing old results");
+		result_char = arc_char_table_find_by_uuid (
+			self->char_table, ARC_RESULT_UUID);
 		ret = attrib_db_update (
 			self->adapter,
-			self->val_handles[ARC_RESULT_ID],
-			NULL,
-			(uint8_t*)NULL,
-			0,
-			NULL);
-
+			result_char->val_handle,
+			NULL,(uint8_t*)NULL,
+			0, NULL);
 		if (ret != 0)
 			error ("failed to write attrib");
+
+		request = g_strndup ((const char*)achar->val->data,
+				     achar->val->len);
 
 		DBG ("emitting method-called");
 		g_dbus_emit_signal (
@@ -387,8 +394,10 @@ handle_blob (ARCServer *self, struct attribute *attr,
 			ARC_SERVER_IFACE, "MethodCalled",
 			DBUS_TYPE_OBJECT_PATH, &objpath,
 			DBUS_TYPE_STRING,
-			&self->values[ARC_REQUEST_ID]->str,
+			request,
 			DBUS_TYPE_INVALID);
+
+		g_free (request);
 	}
 }
 
@@ -422,98 +431,94 @@ update_disconnect_timeouts (ARCServer *self, struct btd_device *device)
 			(GSourceFunc)do_disconnect, self);
 }
 
-
-
-static ARCID
-find_id_for_attribute (ARCServer *self, struct attribute* attr)
-{
-	unsigned u;
-
-	for (u = 0; u != ARC_ID_NUM; ++u) {
-		if (attr->handle == self->val_handles[u])
-			return u;
-	}
-
-	return u;
-}
-
-
 static uint8_t
-on_attr_write (struct attribute *attr, struct btd_device *device,
-	       ARCServer *self)
+attr_arc_server_write (struct attribute *attr, struct btd_device *device,
+		       ARCServer *self)
 {
-	ARCID		 id;
-	GString		*gstr;
-	char		*str, *s;
+	ARCChar		*achar;
+	unsigned	 u;
 
 	DBG ("writing handle 0x%04x", attr->handle);
 	update_disconnect_timeouts (self, device);
 
-	id = find_id_for_attribute (self, attr);
-	if (id == ARC_ID_NUM) {
+	achar = arc_char_table_find_by_attr (self->char_table, attr);
+	if (!achar) {
 		error ("unknown handle");
+		return 0;
+	}
+
+	if (!achar->flags & ARC_CHAR_FLAG_WRITABLE) {
+		error ("characteristic is not writable");
 		return 0;
 	}
 
 	/* if we see 0xfe, we start from scratch;
 	 * otherwise, accumulate until we see 0xff*/
-	str = g_strndup ((const char*)attr->data, attr->len);
-
-	for (s = str; *s; ++s) {
-		switch ((unsigned char)*s) {
-		case 0xfe:
-			g_string_truncate (self->values[id], 0);
+	for (u = 0; u != attr->len; ++u) {
+		guint8 byte;
+		byte = (guint8)attr->data[u];
+		switch (byte) {
+		case 0xfe: /* remove everything */
+			arc_char_set_value_string (achar, NULL);
 			break;
 		case 0xff:
-			handle_blob (self, attr, device, id);
-			g_string_truncate (self->values[id], 0);
+			handle_blob (self, attr, device, achar);
 			break;
-		default:
-			g_string_append_c (self->values[id], *s);
+		default: /* append */
+			g_byte_array_append (achar->val, &byte, 1);
 			break;
 		}
 	}
-	g_free (str);
 
 	return 0;
 }
 
 
-static uint8_t
-on_attr_read (struct attribute	*attr,
-	      struct btd_device *device, ARCServer *self)
-{
-	ARCID	id;
-	GString *gstr;
-	char	 str[ATT_MAX_VALUE_LEN];
-	size_t	 len;
 
-	id = find_id_for_attribute (self, attr);
-	if (id == ARC_ID_NUM) {
+static uint8_t
+attr_arc_server_read (struct attribute	*attr,
+		      struct btd_device *device, ARCServer *self)
+{
+	ARCChar		*achar;
+	ARCID		 id;
+	char		 str[ATT_MAX_VALUE_LEN];
+	size_t		 len;
+	const guint	 BLE_MAXLEN = 19; /* empirically derived */
+
+	achar = arc_char_table_find_by_attr (self->char_table, attr);
+	if (!achar) {
 		error ("unknown handle");
 		return 0;
 	}
 
-	gstr = self->values[id];
-	if (!gstr)
+	if (!achar->flags & ARC_CHAR_FLAG_READABLE) {
+		error ("characteristic is not readable");
 		return 0;
-
-	len  = MIN (sizeof(gstr->str) - 2, gstr->len);
-	if (len == 0)
-		return 0;
-
-	if (!self->writing_result) {
-		str[0] = 0xfe;
-		memcpy (str + 1, gstr->str, len - 1);
-		g_string_erase (gstr, 0, len  - 1);
-		self->writing_result = TRUE;
-	} else {
-		memcpy (str, gstr->str, len);
-		g_string_erase (gstr, 0, len);
 	}
 
-	if (gstr->len == 0) {
-		str[len] = 0xff;
+	/* write in chunks; this is an ugly workaround because bluez
+	 * cannot do long-writes (2013.09.20) */
+	len = MIN (BLE_MAXLEN, achar->val->len);
+
+	/* we just start with this value; set the beginning-of-data
+	 * token (length is one less) */
+	if (!self->writing_result) {
+		self->writing_result = TRUE;
+		str[0]		     = 0xfe;	/* the token for begin-of-data */
+		if (len > 0) { /* copy a chunk  and remove it */
+			memcpy (str + 1, achar->val->data, len - 1);
+			g_byte_array_remove_range (
+				achar->val, 0, len - 1);
+		}
+	} else { /* we're in the middle */
+		memcpy (str, achar->val->data, len);
+		g_byte_array_remove_range (achar->val, 0, len);
+	}
+
+	/* we're at the end? check if there's space left; if not, this
+	 * goes with the next read */
+	if (achar->val->len == 0 && len < BLE_MAXLEN) {
+		str[len]	     = 0xff;
 		self->writing_result = FALSE;
 	}
 
@@ -526,75 +531,48 @@ on_attr_read (struct attribute	*attr,
 	return 0;
 }
 
-
 static gboolean
 register_service (ARCServer *self)
 {
-	bt_uuid_t	uuid[ARC_ID_NUM], srv_uuid;
-	gboolean	rv;
-	unsigned	u;
-
-	DBG ("%s", __FUNCTION__);
+	GHashTableIter	 iter;
+	const char	*uuidstr;
+	ARCChar		*achar;
+	bt_uuid_t	 srv_uuid;
 
 	bt_string_to_uuid (&srv_uuid, ARC_SERVICE_UUID);
 
- 	bt_string_to_uuid (&uuid[ARC_REQUEST_ID], ARC_REQUEST_UUID);
-	bt_string_to_uuid (&uuid[ARC_RESULT_ID], ARC_RESULT_UUID);
-	bt_string_to_uuid (&uuid[ARC_EVENT_ID],  ARC_EVENT_UUID);
-	bt_string_to_uuid (&uuid[ARC_TARGET_ID], ARC_TARGET_UUID);
-	bt_string_to_uuid (&uuid[ARC_DEVNAME_ID], ARC_DEVNAME_UUID);
+	g_hash_table_iter_init (&iter, self->char_table);
+	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
+				       (gpointer)&achar)) {
 
-	rv =  gatt_service_add (
-		self->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
+		gboolean	rv;
+		bt_uuid_t	char_uuid;
 
-		/*
-		 * This gets the request from clients (ie., Json-blobs)
-		 * */
-		GATT_OPT_CHR_UUID, &uuid[ARC_REQUEST_ID],
-		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_WRITE | ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, self,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_REQUEST_ID],
+		bt_string_to_uuid (&char_uuid, uuidstr);
 
-		/*
-		 * This get the results of request (Json blobs)
-		 */
-		GATT_OPT_CHR_UUID, &uuid[ARC_RESULT_ID],
-		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_RESULT_ID],
+		rv = gatt_service_add (
+			self->adapter,
+			GATT_PRIM_SVC_UUID, &srv_uuid,
+			GATT_OPT_CHR_UUID, &char_uuid,
+			GATT_OPT_CHR_PROPS, achar->gatt_props,
+			GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+			attr_arc_server_write, self,
+			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+			attr_arc_server_read, self,
+			GATT_OPT_CHR_VALUE_GET_HANDLE, &achar->val_handle,
 
-		/*
-		 * This get events (ie., data for /all/ clients
-		 */
-		GATT_OPT_CHR_UUID, &uuid[ARC_EVENT_ID],
-		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ | ATT_CHAR_PROPER_WRITE,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE, on_attr_write, self,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_EVENT_ID],
+			GATT_OPT_INVALID);
+		if (!rv)  {
+			error ("failed to add characteristic %s",
+			       achar->name);
+			return FALSE;
+		} else
+			DBG ("added characteristic %s (%s)",
+			     achar->name, uuidstr);
+	}
 
-		/*
-		 * It seems that sometimes iOS-clients don't see the alias/name
-		 * so we store it as a characteristic as well.
-		 *
-		 */
-		GATT_OPT_CHR_UUID, &uuid[ARC_DEVNAME_ID],
-		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_DEVNAME_ID],
-
-
-		GATT_OPT_CHR_UUID, &uuid[ARC_TARGET_ID],
-		GATT_OPT_CHR_PROPS, ATT_CHAR_PROPER_READ,
-		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ, on_attr_read, self,
-		GATT_OPT_CHR_VALUE_GET_HANDLE, &self->val_handles[ARC_TARGET_ID],
-
-		GATT_OPT_INVALID);
-
-	return rv;
+	return TRUE;
 }
-
-
 
 /*
  * find the bdaddr_t* bluetooth address for the device with the matching
@@ -634,21 +612,21 @@ find_device_for_object_path (ARCServer *self, const char *obj_path)
 
 
 static int
-chunked_attrib_db_update (ARCServer *self, GString *value, ARCID id)
+chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 {
 	int		 ret;
 	const unsigned	 chunksize = 20;
-	GString		*gstr;
+	guint8		*bytes, *cur;
 	char		*s;
 
-	/* wrap in 0xfe <string> 0xff */
-	gstr = g_string_new (value->str);
-	g_string_prepend_c (gstr, 0xfe);
-	g_string_append_c (gstr, 0xff);
+	/* wrap in 0xfe <data> 0xff */
+	bytes = g_new (guint8, achar->val->len + 2);
+	memcpy (bytes + 1, achar->val->data,
+		achar->val->len);
+	bytes[achar->val->len + 1] = 0xff;
 
-	/* send in bufsize blobs */
-	s   = gstr->str;
 	ret = 0;
+	cur = bytes;
 
 	for (;;) {
 		size_t	size;
@@ -658,10 +636,9 @@ chunked_attrib_db_update (ARCServer *self, GString *value, ARCID id)
 
 		ret = attrib_db_update (
 			self->adapter,
-			self->val_handles[id],
+			achar->val_handle,
 			NULL,
-			(uint8_t*)s,
-			size,
+			(uint8_t*)cur, size,
 			NULL);
 
 		if (ret != 0) {
@@ -674,10 +651,10 @@ chunked_attrib_db_update (ARCServer *self, GString *value, ARCID id)
 		if (size < chunksize)
 			break; /* we're done */
 
-		s += size;
+		cur += size;
 	}
 
-	g_string_free (gstr, TRUE);
+	g_free (bytes);
 
 	return ret;
 }
@@ -686,13 +663,15 @@ chunked_attrib_db_update (ARCServer *self, GString *value, ARCID id)
 
 
 static DBusMessage*
-emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
+emit_event_method (DBusConnection *conn, DBusMessage *msg,
+		   ARCServer *self)
 {
 	DBusMessage		*reply;
 	const char		*event;
 	gboolean		 rv;
 	int			 ret;
 	struct btd_device	*device;
+	ARCChar			*event_achar;
 
 	rv = dbus_message_get_args (msg, NULL,
 				    DBUS_TYPE_STRING, &event,
@@ -700,13 +679,19 @@ emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!rv)
 		return btd_error_invalid_args (msg);
 
-	/* server data */
-	g_string_assign (self->values[ARC_EVENT_ID], event);
+	event_achar = arc_char_table_find_by_uuid (
+		self->char_table, ARC_EVENT_UUID);
+	if (!event_achar) {
+		error ("cannot find event-char");
+		return btd_error_invalid_args (msg);
+	}
 
-	ret = chunked_attrib_db_update (self, self->values[ARC_EVENT_ID],
-					ARC_EVENT_ID);
+	arc_char_set_value_string (event_achar, event);
+
+	ret = chunked_attrib_db_update (self, event_achar);
 	if (ret != 0)
-		DBG ("error writing event to GATT: %s", strerror(-ret));
+		DBG ("error writing event to GATT: %s",
+		     strerror(-ret));
 
 	reply = dbus_message_new_method_return (msg);
 	if (!reply)
@@ -719,15 +704,16 @@ emit_event_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 
 
 static DBusMessage*
-submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
+submit_result_method (DBusConnection *conn, DBusMessage *msg,
+		      ARCServer *self)
 {
 	DBusMessage		*reply;
-	const char		*target_path, *results;
+	const char		*results, *target_path;
 	gboolean		 rv;
 	int			 ret;
-	const bdaddr_t*		 target_addr;
-	char			*target;
+	char			*res;
 	struct btd_device	*device;
+	ARCChar			*result_achar;
 
 	DBG ("%s", __FUNCTION__);
 
@@ -742,32 +728,33 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!device)
  		return btd_error_failed (msg, "could not find target");
 
-	DBG ("SUBMITTING RESULT '%s'", self->values[ARC_RESULT_ID]->str);
+	result_achar = arc_char_table_find_by_uuid (
+		self->char_table, ARC_RESULT_UUID);
+	if (!result_achar) {
+		error ("cannot find result-char");
+		return btd_error_invalid_args (msg);
+	}
 
+	res = g_strndup ((const char*)result_achar->val->data,
+			 result_achar->val->len);
+	DBG ("submitting result '%s'", res);
+	g_free (res);
+
+	/* here, for writing, chunking is not necessary. Or? */
 	ret = attrib_db_update (
 		self->adapter,
-		self->val_handles[ARC_RESULT_ID],
+		result_achar->val_handle,
 		NULL,
-		(uint8_t*)self->values[ARC_RESULT_ID]->str,
-		self->values[ARC_RESULT_ID]->len,
+		result_achar->val->data,
+		result_achar->val->len,
 		NULL);
 
-	/* target = batostr (target_addr); */
-	/* g_string_assign (self->values[ARC_TARGET_ID], target); */
-	/* bt_free (target); */
-
-	/* ret = chunked_attrib_db_update (self, self->values[ARC_TARGET_ID], */
-	/* 				ARC_TARGET_ID); */
-
 	if (ret != 0)
-		return btd_error_failed (msg, "gatt update failed (result)");
-
-	/* notify_devices (self, ARC_RESULT_ID); */
+		return btd_error_failed
+			(msg, "gatt update failed (result)");
 
 	if (!(reply = dbus_message_new_method_return (msg)))
 		return btd_error_failed (msg, "error creating DBus reply");
-
-	/* notify_devices (self, ARC_TARGET_ID); */
 
 	dbus_message_append_args(reply, DBUS_TYPE_INVALID);
 
@@ -786,12 +773,14 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
  * @return
  */
 static DBusMessage*
-update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
+update_name_method (DBusConnection *conn, DBusMessage *msg,
+		    ARCServer *self)
 {
 	DBusMessage	*reply;
 	const char	*name;
 	gboolean	 rv;
 	int		 ret;
+	ARCChar		*name_char;
 
 	rv     = dbus_message_get_args (msg, NULL,
 					DBUS_TYPE_STRING, &name,
@@ -800,12 +789,18 @@ update_name_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 		return btd_error_invalid_args (msg);
 
 	if (adapter_set_name (self->adapter, name) != 0)
-		return btd_error_failed (msg, "updating adapter name failed");
+		return btd_error_failed (
+			msg, "updating adapter name failed");
 
-	/* server */
-	g_string_assign (self->values[ARC_DEVNAME_ID], name);
-	ret = chunked_attrib_db_update (self, self->values[ARC_DEVNAME_ID],
-					ARC_DEVNAME_ID);
+	name_char = arc_char_table_find_by_uuid (
+		self->char_table, ARC_DEVNAME_UUID);
+	if (!name_char)
+		return btd_error_failed (
+			msg, "cannot find name char");
+
+	arc_char_set_value_string (name_char, name);
+
+	ret = chunked_attrib_db_update (self, name_char);
 	if (ret != 0)
 		return btd_error_failed (msg, "gatt update failed (name)");
 
@@ -860,8 +855,10 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 }
 
 
+
+
 static const GDBusSignalTable
-	ARC_SERVER_SIGNALS[] = {
+ARC_SERVER_SIGNALS[] = {
 	{ GDBUS_SIGNAL ("MethodCalled",
 			GDBUS_ARGS({"Caller", "o"},
 				   {"Params", "s"}))},
@@ -894,7 +891,6 @@ ARC_SERVER_METHODS[] = {
 
 	{}
 };
-
 
 int
 arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)

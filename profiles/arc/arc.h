@@ -22,20 +22,101 @@ G_BEGIN_DECLS
 /* the GATT service */
 #define ARC_SERVICE_UUID        "939DCB26-B6CB-4519-B6CA-A0D617C403BB"
 
+
 /* characteristics */
 #define ARC_REQUEST_UUID	"8D4DD795-D603-4D0A-93F7-02DE511F4B70"
 #define ARC_EVENT_UUID		"1BA9AF1F-686E-4E1B-90A7-6945584BECA0"
 #define ARC_RESULT_UUID		"B7F2D698-B677-4B93-8D9B-83E3B6ED9AE0"
 #define ARC_TARGET_UUID		"F6FECADF-4148-46F8-B63A-47427634A5D5"
 #define ARC_DEVNAME_UUID        "6C39EC45-C012-47B5-ADC2-B98A91EA0494"
+#define ARC_JID_UUID            "0677B8B1-D6DA-439E-BAB6-F22535991D05"
+
+
+typedef enum {
+	ARC_CHAR_FLAG_NONE	= 0,
+	ARC_CHAR_FLAG_READABLE  = 1 << 0,
+	ARC_CHAR_FLAG_WRITABLE  = 1 << 1,
+	ARC_CHAR_FLAG_SERVER    = 1 << 2
+} ARCCharFlags;
+
+/**
+ * ARC Characteristic
+ *
+ *
+ *
+ */
+struct ARCChar {
+	char		*name;
+	GByteArray	*val;
+	guint16		 handle;
+	guint16		 val_handle;
+	ARCCharFlags     flags;
+	char		*uuid;
+	guint		 gatt_props;
+};
+typedef struct ARCChar	 ARCChar;
+
+
+
+/**
+ * Set the value to some string
+ *
+ * @param achar
+ * @param str a string, or NULL
+ */
+void arc_char_set_value_string (ARCChar *achar, const char *str);
+
+
+/**
+ * Create a new hashtable for UUID->ARCChars; free with
+ * g_hash_table_unref
+ *
+ * @return  a new hash table
+ */
+GHashTable *arc_char_table_new (void);
+
+/**
+ * Add a characteristic to our table
+ *
+ * @param uuid
+ * @param name
+ *
+ * @return the newly added ARCChar
+ */
+ARCChar *arc_char_table_add_char (GHashTable *chars, const char *uuid,
+				  const char *name, ARCCharFlags flags);
+
+/**
+ * Get a characteristic from our table
+ *
+ * @param chars
+ * @param uuid
+ *
+ * @return
+ */
+ARCChar* arc_char_table_find_by_uuid (GHashTable *chars,
+				      const char *uuid);
+
+
+/**
+ * Get a characteristic based on an attribute
+ *
+ * @param table
+ * @param attr
+ *
+ * @return
+ */
+ARCChar* arc_char_table_find_by_attr (GHashTable *table,
+				      struct attribute* attr);
+
+
+
 
 
 #define ARC_PROP_RESULT  "Result"
 #define ARC_PROP_TARGET  "Target"
 #define ARC_PROP_EVENT   "Event"
 #define ARC_PROP_REQUEST "Request"
-
-
 
 /* ids for the various handles */
 typedef enum {
@@ -44,6 +125,7 @@ typedef enum {
 	ARC_RESULT_ID,
 	ARC_TARGET_ID,
 	ARC_DEVNAME_ID,
+	ARC_JID_ID,
 
 	ARC_ID_NUM
 } ARCID;

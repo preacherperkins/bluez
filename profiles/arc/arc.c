@@ -38,8 +38,142 @@ static struct {
 	{ ARC_EVENT_ID,   "Event" },
 	{ ARC_RESULT_ID,  "Result" },
 	{ ARC_REQUEST_ID, "Request" },
-	{ ARC_TARGET_ID,  "Target" }
+	{ ARC_TARGET_ID,  "Target" },
+	{ ARC_JID_ID,     "JID" }
 };
+
+
+
+static void
+free_arch_char (ARCChar *achar)
+{
+	if (!achar)
+		return;
+
+	g_free (achar->name);
+	g_free (achar->uuid);
+
+	if (achar->val)
+		g_byte_array_unref (achar->val);
+
+	g_free (achar);
+}
+
+
+GHashTable*
+arc_char_table_new (void)
+{
+	GHashTable *char_table;
+
+	char_table = g_hash_table_new_full (
+		g_str_hash, g_str_equal,
+		(GDestroyNotify)g_free,
+		(GDestroyNotify)free_arch_char);
+
+	/* my characteristics */
+	arc_char_table_add_char (
+		char_table,
+		ARC_REQUEST_UUID, "Request",
+		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
+	arc_char_table_add_char (
+		char_table,
+		ARC_RESULT_UUID, "Result",
+		ARC_CHAR_FLAG_READABLE);
+	arc_char_table_add_char (
+		char_table,
+		ARC_EVENT_UUID, "Event",
+		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
+	arc_char_table_add_char (
+		char_table,
+		ARC_DEVNAME_UUID, "DeviceName",
+		ARC_CHAR_FLAG_READABLE);
+	arc_char_table_add_char (
+		char_table,
+		ARC_JID_UUID, "JID",
+		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
+	arc_char_table_add_char (
+		char_table,
+		ARC_TARGET_UUID, "Target",
+		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
+
+	return char_table;
+}
+
+
+ARCChar*
+arc_char_table_add_char (GHashTable *table,
+			 const char *uuidstr, const char *name,
+			 ARCCharFlags flags)
+{
+	ARCChar		*achar;
+
+	g_return_val_if_fail (table, NULL);
+	g_return_val_if_fail (uuidstr, NULL);
+	g_return_val_if_fail (name, NULL);
+
+	achar	     = g_new0 (ARCChar, 1);
+	achar->name  = g_strdup (name);
+	achar->val   = g_byte_array_new ();
+	achar->uuid  = g_strdup (uuidstr);
+
+	achar->flags = flags;
+
+	achar->gatt_props = 0;
+	if (achar->flags & ARC_CHAR_FLAG_READABLE)
+		achar->gatt_props |= ATT_CHAR_PROPER_READ;
+	if (achar->flags & ARC_CHAR_FLAG_WRITABLE)
+		achar->gatt_props |= ATT_CHAR_PROPER_WRITE;
+
+	g_hash_table_insert (table, g_strdup (uuidstr), achar);
+
+	return achar;
+}
+
+
+ARCChar*
+arc_char_table_find_by_uuid (GHashTable *table, const char *uuid)
+{
+	g_return_val_if_fail (table, NULL);
+	g_return_val_if_fail (uuid, NULL);
+
+ 	return (ARCChar*)g_hash_table_lookup (table, uuid);
+}
+
+
+ARCChar*
+arc_char_table_find_by_attr (GHashTable *table,
+				  struct attribute* attr)
+{
+	GHashTableIter	 iter;
+	const char	*uuidstr;
+	ARCChar		*achar;
+
+	g_return_val_if_fail (table, NULL);
+	g_return_val_if_fail (attr, NULL);
+
+	g_hash_table_iter_init (&iter, table);
+	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
+				       (gpointer)&achar))
+		if (attr->handle == achar->val_handle)
+			return achar;
+
+	return NULL;
+}
+
+
+void
+arc_char_set_value_string (ARCChar *achar, const char *str)
+{
+	g_return_if_fail (achar);
+
+	g_byte_array_remove_range (achar->val, 0,
+				   achar->val->len);
+	if (str)
+		g_byte_array_append (achar->val, (const guint8*)str,
+				     strlen (str));
+}
+
+
 
 const char*
 arc_id_to_prop (ARCID id)
