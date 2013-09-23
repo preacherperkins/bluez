@@ -303,8 +303,8 @@ hci_set_adv_data (int hcidev, const char *name)
 
 	advdata_cp.length  = offset;
 
-	DBG ("hci adv data");
-	dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp));
+	/* DBG ("hci adv data"); */
+	/* dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp)); */
 
 	memset (&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
@@ -659,9 +659,6 @@ chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 	return ret;
 }
 
-
-
-
 static DBusMessage*
 emit_event_method (DBusConnection *conn, DBusMessage *msg,
 		   ARCServer *self)
@@ -883,7 +880,7 @@ property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	}
 
 	arc_char_set_value_string (achar, str);
-	if (!chunked_attrib_db_update (aserver, achar)) {
+	if (chunked_attrib_db_update (aserver, achar) != 0) {
 		g_dbus_pending_property_error(
 			id, ERROR_INTERFACE ".InvalidArguments",
 			"Failed to update GATT");
@@ -894,7 +891,6 @@ property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 				      adapter_get_path (aserver->adapter),
 				      ARC_SERVER_IFACE, str);
 }
-
 
 
 static gboolean
@@ -925,7 +921,7 @@ property_get (const GDBusPropertyTable *property,
 
 	str = arc_char_get_value_string (achar);
 	if (!str)
-		return FALSE;
+		str = g_strdup ("");
 
 	dbus_message_iter_append_basic (iter, DBUS_TYPE_STRING, &str);
 	g_free (str);
@@ -940,7 +936,7 @@ ARC_SERVER_PROPS[] = {
 	{ "JID", "s",
 	  (GDBusPropertyGetter)property_get,
 	  (GDBusPropertySetter)property_set,
-	  (GDBusPropertyExists)property_exists
+	  NULL
 	},
 	{}
 };
@@ -993,12 +989,12 @@ arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)
 	register_service (self);
 
 	g_dbus_register_interface (btd_get_dbus_connection(),
-				adapter_get_path (adapter),
-				ARC_SERVER_IFACE,
-				ARC_SERVER_METHODS,
-				ARC_SERVER_SIGNALS,
-				ARC_SERVER_PROPS,
-				self, NULL);
+				   adapter_get_path (adapter),
+				   ARC_SERVER_IFACE,
+				   ARC_SERVER_METHODS,
+				   ARC_SERVER_SIGNALS,
+				   ARC_SERVER_PROPS,
+				   self, NULL);
 
 	ARC_SERVERS = g_slist_prepend (ARC_SERVERS, self);
 

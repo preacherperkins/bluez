@@ -186,8 +186,9 @@ arc_char_set_value_string (ARCChar *achar, const char *str)
 {
 	g_return_if_fail (achar);
 
-	g_byte_array_remove_range (achar->val, 0,
-				   achar->val->len);
+	if (achar->val->len > 0)
+		g_byte_array_remove_range (achar->val, 0,
+					   achar->val->len);
 	if (str)
 		g_byte_array_append (achar->val, (const guint8*)str,
 				     strlen (str));
