@@ -68,6 +68,15 @@ void arc_char_set_value_string (ARCChar *achar, const char *str);
 
 
 /**
+ * Get the ARChar's value as a string.
+ *
+ * @param achar
+ *
+ * @return the string (free with g_free)
+ */
+char* arc_char_get_value_string (ARCChar *achar);
+
+/**
  * Create a new hashtable for UUID->ARCChars; free with
  * g_hash_table_unref
  *
@@ -110,8 +119,16 @@ ARCChar* arc_char_table_find_by_attr (GHashTable *table,
 				      struct attribute* attr);
 
 
-
-
+/**
+ * Get a characteristic based on its name
+ *
+ * @param table
+ * @param name
+ *
+ * @return
+ */
+ARCChar* arc_char_table_find_by_name (GHashTable *table,
+				      const char *name);
 
 #define ARC_PROP_RESULT  "Result"
 #define ARC_PROP_TARGET  "Target"

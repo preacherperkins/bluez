@@ -160,6 +160,26 @@ arc_char_table_find_by_attr (GHashTable *table,
 	return NULL;
 }
 
+ARCChar*
+arc_char_table_find_by_name (GHashTable *table, const char *name)
+{
+	GHashTableIter	 iter;
+	const char	*uuidstr;
+	ARCChar		*achar;
+
+	g_return_val_if_fail (table, NULL);
+	g_return_val_if_fail (name, NULL);
+
+	g_hash_table_iter_init (&iter, table);
+	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
+				       (gpointer)&achar))
+		if (g_strcmp0 (name, achar->name) == 0)
+			return achar;
+
+	return NULL;
+}
+
+
 
 void
 arc_char_set_value_string (ARCChar *achar, const char *str)
@@ -172,6 +192,19 @@ arc_char_set_value_string (ARCChar *achar, const char *str)
 		g_byte_array_append (achar->val, (const guint8*)str,
 				     strlen (str));
 }
+
+char*
+arc_char_get_value_string (ARCChar *achar)
+{
+	g_return_val_if_fail (achar, NULL);
+
+	if (achar->val->len == 0)
+		return NULL;
+
+	return g_strndup ((const char*)achar->val->data,
+			  achar->val->len);
+}
+
 
 
 

@@ -857,6 +857,97 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 
 
 
+static void
+property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
+	      GDBusPendingPropertySet id, ARCServer *aserver)
+{
+	ARCChar		*achar;
+	const char	*str;
+
+	if (dbus_message_iter_get_arg_type(iter) != DBUS_TYPE_STRING) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Invalid request parameter");
+		return;
+	}
+
+	dbus_message_iter_get_basic(iter, &str);
+
+	achar = arc_char_table_find_by_name (aserver->char_table,
+					     property->name);
+	if (!achar) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Unknown property");
+		return;
+	}
+
+	arc_char_set_value_string (achar, str);
+	if (!chunked_attrib_db_update (aserver, achar)) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Failed to update GATT");
+		return;
+	}
+
+	g_dbus_emit_property_changed (btd_get_dbus_connection (),
+				      adapter_get_path (aserver->adapter),
+				      ARC_SERVER_IFACE, str);
+}
+
+
+
+static gboolean
+property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
+{
+	ARCChar *achar;
+
+	achar = arc_char_table_find_by_name (aserver->char_table,
+					     property->name);
+
+	return achar ? TRUE : FALSE;
+}
+
+
+static gboolean
+property_get (const GDBusPropertyTable *property,
+	      DBusMessageIter *iter, ARCServer *aserver)
+{
+	ARCChar	*achar;
+	char	*str;
+
+	achar = arc_char_table_find_by_name (aserver->char_table,
+					     property->name);
+	if (!achar) {
+		error ("unknown property %s", property->name);
+		return FALSE;
+	}
+
+	str = arc_char_get_value_string (achar);
+	if (!str)
+		return FALSE;
+
+	dbus_message_iter_append_basic (iter, DBUS_TYPE_STRING, &str);
+	g_free (str);
+
+	return TRUE;
+}
+
+
+
+static const GDBusPropertyTable
+ARC_SERVER_PROPS[] = {
+	{ "JID", "s",
+	  (GDBusPropertyGetter)property_get,
+	  (GDBusPropertySetter)property_set,
+	  (GDBusPropertyExists)property_exists
+	},
+	{}
+};
+
+
+
+
 static const GDBusSignalTable
 ARC_SERVER_SIGNALS[] = {
 	{ GDBUS_SIGNAL ("MethodCalled",
@@ -902,13 +993,12 @@ arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)
 	register_service (self);
 
 	g_dbus_register_interface (btd_get_dbus_connection(),
-				   adapter_get_path (adapter),
-				   ARC_SERVER_IFACE,
-				   ARC_SERVER_METHODS,
-				   ARC_SERVER_SIGNALS,
-				   NULL, /* properties */
-				   self,
-				   NULL);
+				adapter_get_path (adapter),
+				ARC_SERVER_IFACE,
+				ARC_SERVER_METHODS,
+				ARC_SERVER_SIGNALS,
+				ARC_SERVER_PROPS,
+				self, NULL);
 
 	ARC_SERVERS = g_slist_prepend (ARC_SERVERS, self);
 
