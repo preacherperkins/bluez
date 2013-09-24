@@ -784,6 +784,8 @@ update_name_method (DBusConnection *conn, DBusMessage *msg,
 	if (!rv)
 		return btd_error_invalid_args (msg);
 
+	DBG ("updating name to '%s'", name);
+
 	if (adapter_set_name (self->adapter, name) != 0)
 		return btd_error_failed (
 			msg, "updating adapter name failed");
@@ -860,6 +862,8 @@ property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	ARCChar		*achar;
 	const char	*str;
 
+	DBG ("%s: %s", __FUNCTION__, property->name);
+
 	if (dbus_message_iter_get_arg_type(iter) != DBUS_TYPE_STRING) {
 		g_dbus_pending_property_error(
 			id, ERROR_INTERFACE ".InvalidArguments",
@@ -889,6 +893,8 @@ property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	g_dbus_emit_property_changed (btd_get_dbus_connection (),
 				      adapter_get_path (aserver->adapter),
 				      ARC_SERVER_IFACE, str);
+
+	g_dbus_pending_property_success (id);
 }
 
 
@@ -896,6 +902,8 @@ static gboolean
 property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
 {
 	ARCChar *achar;
+
+	DBG ("%s: %s", __FUNCTION__, property->name);
 
 	achar = arc_char_table_find_by_name (aserver->char_table,
 					     property->name);
@@ -911,8 +919,10 @@ property_get (const GDBusPropertyTable *property,
 	ARCChar	*achar;
 	char	*str;
 
+	DBG ("%s: %s", __FUNCTION__, property->name);
+
 	achar = arc_char_table_find_by_name (aserver->char_table,
-					     property->name);
+						property->name);
 	if (!achar) {
 		error ("unknown property %s", property->name);
 		return FALSE;
