@@ -350,7 +350,7 @@ static void
 handle_blob (ARCServer *self, struct attribute *attr,
 	     struct btd_device *device, ARCChar *achar)
 {
-	if (g_strcmp0 (achar->uuid, ARC_REQUEST_UUID) == 0) {
+	if (g_strcmp0 (achar->uuidstr, ARC_REQUEST_UUID) == 0) {
 
 		int		 ret;
 		char		*str;
@@ -533,41 +533,77 @@ static gboolean
 register_service (ARCServer *self)
 {
 	GHashTableIter	 iter;
+	gboolean	 rv;
 	const char	*uuidstr;
-	ARCChar		*achar;
 	bt_uuid_t	 srv_uuid;
+	ARCChar		*req_char, *event_char, *result_char,
+			*devname_char, *jid_char;
 
 	bt_string_to_uuid (&srv_uuid, ARC_SERVICE_UUID);
 
-	g_hash_table_iter_init (&iter, self->char_table);
-	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
-				       (gpointer)&achar)) {
+	req_char     = arc_char_table_find_by_uuid (self->char_table,
+						ARC_REQUEST_UUID);
+	event_char   = arc_char_table_find_by_uuid (self->char_table,
+						ARC_EVENT_UUID);
+	result_char  = arc_char_table_find_by_uuid (self->char_table,
+						ARC_RESULT_UUID);
+	devname_char = arc_char_table_find_by_uuid (self->char_table,
+						ARC_DEVNAME_UUID);
+	jid_char     = arc_char_table_find_by_uuid (self->char_table,
+						ARC_JID_UUID);
 
-		gboolean	rv;
-		bt_uuid_t	char_uuid;
+	rv = gatt_service_add (
+		self->adapter,
+		GATT_PRIM_SVC_UUID, &srv_uuid,
 
-		bt_string_to_uuid (&char_uuid, uuidstr);
+		GATT_OPT_CHR_UUID, &req_char->uuid,
+		GATT_OPT_CHR_PROPS, req_char->gatt_props,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+		attr_arc_server_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+		attr_arc_server_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &req_char->val_handle,
 
-		rv = gatt_service_add (
-			self->adapter,
-			GATT_PRIM_SVC_UUID, &srv_uuid,
-			GATT_OPT_CHR_UUID, &char_uuid,
-			GATT_OPT_CHR_PROPS, achar->gatt_props,
-			GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
-			attr_arc_server_write, self,
-			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			attr_arc_server_read, self,
-			GATT_OPT_CHR_VALUE_GET_HANDLE, &achar->val_handle,
+		GATT_OPT_CHR_UUID, &event_char->uuid,
+		GATT_OPT_CHR_PROPS, event_char->gatt_props,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+		attr_arc_server_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+		attr_arc_server_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &event_char->val_handle,
 
-			GATT_OPT_INVALID);
-		if (!rv)  {
-			error ("failed to add characteristic %s",
-			       achar->name);
-			return FALSE;
-		} else
-			DBG ("added characteristic %s (%s)",
-			     achar->name, uuidstr);
-	}
+		GATT_OPT_CHR_UUID, &result_char->uuid,
+		GATT_OPT_CHR_PROPS, result_char->gatt_props,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+		attr_arc_server_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+		attr_arc_server_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &result_char->val_handle,
+
+		GATT_OPT_CHR_UUID, &devname_char->uuid,
+		GATT_OPT_CHR_PROPS, devname_char->gatt_props,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+		attr_arc_server_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+		attr_arc_server_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &devname_char->val_handle,
+
+		GATT_OPT_CHR_UUID, &jid_char->uuid,
+		GATT_OPT_CHR_PROPS, jid_char->gatt_props,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
+		attr_arc_server_write, self,
+		GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+		attr_arc_server_read, self,
+		GATT_OPT_CHR_VALUE_GET_HANDLE, &jid_char->val_handle,
+
+		GATT_OPT_INVALID);
+
+
+	if (!rv)  {
+		error ("failed to add characteristics");
+		return FALSE;
+	} else
+		DBG ("added characteristics");
 
 	return TRUE;
 }

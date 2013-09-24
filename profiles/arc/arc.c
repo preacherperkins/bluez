@@ -51,7 +51,7 @@ free_arch_char (ARCChar *achar)
 		return;
 
 	g_free (achar->name);
-	g_free (achar->uuid);
+	g_free (achar->uuidstr);
 
 	if (achar->val)
 		g_byte_array_unref (achar->val);
@@ -111,10 +111,12 @@ arc_char_table_add_char (GHashTable *table,
 	g_return_val_if_fail (uuidstr, NULL);
 	g_return_val_if_fail (name, NULL);
 
-	achar	     = g_new0 (ARCChar, 1);
-	achar->name  = g_strdup (name);
-	achar->val   = g_byte_array_new ();
-	achar->uuid  = g_strdup (uuidstr);
+	achar	       = g_new0 (ARCChar, 1);
+	achar->name    = g_strdup (name);
+	achar->val     = g_byte_array_new ();
+
+	achar->uuidstr = g_strdup (uuidstr);
+	bt_string_to_uuid (&achar->uuid, achar->uuidstr);
 
 	achar->flags = flags;
 

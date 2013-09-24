@@ -51,9 +51,11 @@ struct ARCChar {
 	guint16		 handle;
 	guint16		 val_handle;
 	ARCCharFlags     flags;
-	char		*uuid;
+	char		*uuidstr;
+	bt_uuid_t	 uuid;
 	guint		 gatt_props;
 	gboolean	 writing;
+
 };
 typedef struct ARCChar	 ARCChar;
 
