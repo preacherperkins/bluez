@@ -67,10 +67,8 @@ static GSList *ARC_SERVERS = NULL;
 typedef struct  {
 	struct btd_adapter	*adapter;
 	GHashTable		*char_table;
-	guint		adv_id, disc_id;
-	gboolean	writing_result;
-
-	struct mgmt *mgmt;
+	guint			 adv_id, disc_id;
+	struct mgmt		*mgmt;
 } ARCServer;
 
 static gboolean do_enable_adv (ARCServer *self);
@@ -458,10 +456,10 @@ attr_arc_server_write (struct attribute *attr, struct btd_device *device,
 		guint8 byte;
 		byte = (guint8)attr->data[u];
 		switch (byte) {
-		case 0xfe: /* remove everything */
+		case ARC_GATT_BLURB_PRE: /* remove everything */
 			arc_char_set_value_string (achar, NULL);
 			break;
-		case 0xff:
+		case ARC_GATT_BLURB_POST:
 			handle_blob (self, attr, device, achar);
 			break;
 		default: /* append */
@@ -502,14 +500,14 @@ attr_arc_server_read (struct attribute	*attr,
 
 	/* we just start with this value; set the beginning-of-data
 	 * token (length is one less) */
-	if (!self->writing_result) {
-		self->writing_result = TRUE;
-		str[0]		     = 0xfe;	/* the token for begin-of-data */
+	if (!achar->writing) {
+		str[0] = ARC_GATT_BLURB_PRE;	/* the token for begin-of-data */
 		if (len > 0) { /* copy a chunk  and remove it */
 			memcpy (str + 1, achar->val->data, len - 1);
 			g_byte_array_remove_range (
 				achar->val, 0, len - 1);
 		}
+		achar->writing = TRUE;
 	} else { /* we're in the middle */
 		memcpy (str, achar->val->data, len);
 		g_byte_array_remove_range (achar->val, 0, len);
@@ -518,8 +516,8 @@ attr_arc_server_read (struct attribute	*attr,
 	/* we're at the end? check if there's space left; if not, this
 	 * goes with the next read */
 	if (achar->val->len == 0 && len < BLE_MAXLEN) {
-		str[len]	     = 0xff;
-		self->writing_result = FALSE;
+		str[len]       = ARC_GATT_BLURB_POST;
+		achar->writing = FALSE;
 	}
 
 	attr->data = (uint8_t*)str;
@@ -620,13 +618,14 @@ chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 	char		*s;
 
 	/* wrap in 0xfe <data> 0xff */
-	bytes = g_new (guint8, achar->val->len + 2);
+	bytes			   = g_new (guint8, achar->val->len + 2);
 	memcpy (bytes + 1, achar->val->data,
 		achar->val->len);
-	bytes[achar->val->len + 1] = 0xff;
 
-	ret = 0;
-	cur = bytes;
+	bytes[0]		   = ARC_GATT_BLURB_PRE;
+	bytes[achar->val->len + 1] = ARC_GATT_BLURB_POST;
+	ret			   = 0;
+	cur			   = bytes;
 
 	for (;;) {
 		size_t	size;
@@ -940,8 +939,6 @@ ARC_SERVER_PROPS[] = {
 	},
 	{}
 };
-
-
 
 
 static const GDBusSignalTable

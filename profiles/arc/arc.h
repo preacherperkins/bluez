@@ -53,10 +53,9 @@ struct ARCChar {
 	ARCCharFlags     flags;
 	char		*uuid;
 	guint		 gatt_props;
+	gboolean	 writing;
 };
 typedef struct ARCChar	 ARCChar;
-
-
 
 /**
  * Set the value to some string
@@ -129,6 +128,13 @@ ARCChar* arc_char_table_find_by_attr (GHashTable *table,
  */
 ARCChar* arc_char_table_find_by_name (GHashTable *table,
 				      const char *name);
+
+#define ARC_GATT_BLURB_PRE  0xfe
+/**< prefix for an ARC blurb */
+
+#define ARC_GATT_BLURB_POST 0xff
+/**< suffix for an ARC blurb */
+
 
 #define ARC_PROP_RESULT  "Result"
 #define ARC_PROP_TARGET  "Target"
