@@ -69,6 +69,7 @@ typedef struct  {
 	GHashTable		*char_table;
 	guint			 adv_id, disc_id;
 	struct mgmt		*mgmt;
+	guint			 magic;
 } ARCServer;
 
 static gboolean do_enable_adv (ARCServer *self);
@@ -264,7 +265,7 @@ hci_set_adv_params (int hcidev)
 /* this all makes sense after reading the BT spec, in particular
  * Appendix C */
 static int
-hci_set_adv_data (int hcidev, const char *name)
+hci_set_adv_data (int hcidev, uint8_t data, const char *name)
 {
 	struct hci_request		rq;
 	le_set_advertising_data_cp	advdata_cp;
@@ -286,6 +287,15 @@ hci_set_adv_data (int hcidev, const char *name)
 	g_assert (uuid.type == BT_UUID128);
 	memcpy (&advdata_cp.data[offset + 2], &uuid.value.u128,
 		sizeof(uuid.value.u128));
+	offset += partsize + 1;
+
+	/* set our manufacturer-specific byte */
+	partsize = 4;
+	advdata_cp.data[offset + 0] = partsize;
+	advdata_cp.data[offset + 1] = 0xff; /* manufacturer-specific data; */
+	advdata_cp.data[offset + 2] = 0xff;  /* Unknown */
+	advdata_cp.data[offset + 3] = 0xff;  /* Vendor */
+	advdata_cp.data[offset + 4] = data;
 	offset += partsize + 1;
 
 	/* the local name to advertise */
@@ -889,10 +899,49 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 }
 
 
+static void
+magic_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
+		    GDBusPendingPropertySet id, ARCServer *aserver)
+{
+	ARCChar	*achar;
+	uint8_t	 byte;
+
+	if (dbus_message_iter_get_arg_type(iter) != DBUS_TYPE_BYTE) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Invalid request parameter");
+		return;
+	}
+
+	dbus_message_iter_get_basic(iter, &byte);
+	aserver->magic = byte;
+
+	DBG ("setting magic to 0x%x", byte);
+
+	g_dbus_emit_property_changed (btd_get_dbus_connection (),
+				adapter_get_path (aserver->adapter),
+				ARC_SERVER_IFACE, property->name);
+
+	g_dbus_pending_property_success (id);
+}
+
+
+
+static gboolean
+magic_property_get (const GDBusPropertyTable *property,
+	      DBusMessageIter *iter, ARCServer *aserver)
+{
+	dbus_message_iter_append_basic (iter, DBUS_TYPE_BYTE, &aserver->magic);
+	return TRUE;
+}
+
+
+
+
 
 
 static void
-property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
+gatt_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	      GDBusPendingPropertySet id, ARCServer *aserver)
 {
 	ARCChar		*achar;
@@ -928,14 +977,14 @@ property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 
 	g_dbus_emit_property_changed (btd_get_dbus_connection (),
 				      adapter_get_path (aserver->adapter),
-				      ARC_SERVER_IFACE, str);
+				      ARC_SERVER_IFACE, property->name);
 
 	g_dbus_pending_property_success (id);
 }
 
 
 static gboolean
-property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
+gatt_property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
 {
 	ARCChar *achar;
 
@@ -949,7 +998,7 @@ property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
 
 
 static gboolean
-property_get (const GDBusPropertyTable *property,
+gatt_property_get (const GDBusPropertyTable *property,
 	      DBusMessageIter *iter, ARCServer *aserver)
 {
 	ARCChar	*achar;
@@ -979,8 +1028,14 @@ property_get (const GDBusPropertyTable *property,
 static const GDBusPropertyTable
 ARC_SERVER_PROPS[] = {
 	{ "JID", "s",
-	  (GDBusPropertyGetter)property_get,
-	  (GDBusPropertySetter)property_set,
+	  (GDBusPropertyGetter)gatt_property_get,
+	  (GDBusPropertySetter)gatt_property_set,
+	  NULL
+	},
+
+	{ "Magic", "y",
+	  (GDBusPropertyGetter)magic_property_get,
+	  (GDBusPropertySetter)magic_property_set,
 	  NULL
 	},
 	{}
@@ -1152,12 +1207,12 @@ enable_adv (ARCServer *self, gboolean enable)
 
 	/* it seems we need to set this each time after enabling
 	 * advertising... */
-	ret = hci_set_adv_data (hcidev, btd_adapter_get_name (self->adapter));
+	ret = hci_set_adv_data (hcidev, self->magic,
+				btd_adapter_get_name (self->adapter));
 	if (ret < 0) {
 		error ("setting arc data failed (%d)", ret);
 		goto leave;
 	}
-
 
 	rv = TRUE;
 leave:
