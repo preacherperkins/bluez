@@ -302,7 +302,7 @@ static void test_condition_complete(struct test_data *data)
 		user->test_data = data; \
 		user->expected_version = 0x06; \
 		user->expected_manufacturer = 0x003f; \
-		user->expected_supported_settings = 0x000002ff; \
+		user->expected_supported_settings = 0x000006ff; \
 		user->initial_settings = 0x00000080; \
 		user->unmet_conditions = 0; \
 		tester_add_full(name, data, \
@@ -338,7 +338,7 @@ static void test_condition_complete(struct test_data *data)
 		user->test_data = data; \
 		user->expected_version = 0x06; \
 		user->expected_manufacturer = 0x003f; \
-		user->expected_supported_settings = 0x00000211; \
+		user->expected_supported_settings = 0x00000611; \
 		user->initial_settings = 0x00000200; \
 		user->unmet_conditions = 0; \
 		tester_add_full(name, data, \
@@ -1013,6 +1013,41 @@ static const struct generic_data set_le_on_invalid_index_test = {
 	.send_param = set_le_on_param,
 	.send_len = sizeof(set_le_on_param),
 	.expect_status = MGMT_STATUS_INVALID_INDEX,
+};
+
+static const char set_adv_on_param[] = { 0x01 };
+static const char set_adv_settings_param_1[] = { 0x80, 0x06, 0x00, 0x00 };
+static const char set_adv_settings_param_2[] = { 0x81, 0x06, 0x00, 0x00 };
+static const char set_adv_on_set_adv_enable_param[] = { 0x01 };
+
+static const struct generic_data set_adv_on_success_test_1 = {
+	.send_opcode = MGMT_OP_SET_ADVERTISING,
+	.send_param = set_adv_on_param,
+	.send_len = sizeof(set_adv_on_param),
+	.expect_status = MGMT_STATUS_SUCCESS,
+	.expect_param = set_adv_settings_param_1,
+	.expect_len = sizeof(set_adv_settings_param_1),
+	.expect_settings_set = MGMT_SETTING_ADVERTISING,
+};
+
+static const struct generic_data set_adv_on_success_test_2 = {
+	.send_opcode = MGMT_OP_SET_ADVERTISING,
+	.send_param = set_adv_on_param,
+	.send_len = sizeof(set_adv_on_param),
+	.expect_status = MGMT_STATUS_SUCCESS,
+	.expect_param = set_adv_settings_param_2,
+	.expect_len = sizeof(set_adv_settings_param_2),
+	.expect_settings_set = MGMT_SETTING_ADVERTISING,
+	.expect_hci_command = BT_HCI_CMD_LE_SET_ADV_ENABLE,
+	.expect_hci_param = set_adv_on_set_adv_enable_param,
+	.expect_hci_len = sizeof(set_adv_on_set_adv_enable_param),
+};
+
+static const struct generic_data set_adv_on_rejected_test_1 = {
+	.send_opcode = MGMT_OP_SET_ADVERTISING,
+	.send_param = set_adv_on_param,
+	.send_len = sizeof(set_adv_on_param),
+	.expect_status = MGMT_STATUS_REJECTED,
 };
 
 static const char set_local_name_param[260] = { 'T', 'e', 's', 't', ' ',
@@ -2691,6 +2726,16 @@ int main(int argc, char *argv[])
 	test_bredrle("Set Low Energy on - Invalid index",
 					&set_le_on_invalid_index_test,
 					NULL, test_command_generic);
+
+	test_bredrle("Set Advertising on - Success 1",
+			&set_adv_on_success_test_1, setup_le,
+			test_command_generic);
+	test_bredrle("Set Advertising on - Success 2",
+			&set_adv_on_success_test_2, setup_le_powered,
+			test_command_generic);
+	test_bredrle("Set Advertising on - Rejected 1",
+			&set_adv_on_rejected_test_1, setup_powered,
+			test_command_generic);
 
 	test_bredr("Set Local Name - Success 1", &set_local_name_test_1,
 						NULL, test_command_generic);

@@ -934,9 +934,8 @@ static int uuid_cmp(const void *a, const void *b)
 	return sdp_uuid_cmp(&rec->svclass, uuid);
 }
 
-void adapter_service_insert(struct btd_adapter *adapter, void *r)
+static void adapter_service_insert(struct btd_adapter *adapter, sdp_record_t *rec)
 {
-	sdp_record_t *rec = r;
 	sdp_list_t *browse_list = NULL;
 	uuid_t browse_uuid;
 	gboolean new_uuid;
@@ -944,8 +943,10 @@ void adapter_service_insert(struct btd_adapter *adapter, void *r)
 	DBG("%s", adapter->path);
 
 	/* skip record without a browse group */
-	if (sdp_get_browse_groups(rec, &browse_list) < 0)
+	if (sdp_get_browse_groups(rec, &browse_list) < 0) {
+		DBG("skipping record without browse group");
 		return;
+	}
 
 	sdp_uuid16_create(&browse_uuid, PUBLIC_BROWSE_GROUP);
 
@@ -970,18 +971,36 @@ done:
 	sdp_list_free(browse_list, free);
 }
 
-void adapter_service_remove(struct btd_adapter *adapter, void *r)
+int adapter_service_add(struct btd_adapter *adapter, sdp_record_t *rec)
 {
-	sdp_record_t *rec = r;
+	int ret;
 
 	DBG("%s", adapter->path);
 
-	adapter->services = sdp_list_remove(adapter->services, rec);
+	ret = add_record_to_server(&adapter->bdaddr, rec);
+	if (ret < 0)
+		return ret;
 
-	if (sdp_list_find(adapter->services, &rec->svclass, uuid_cmp))
+	adapter_service_insert(adapter, rec);
+
+	return 0;
+}
+
+void adapter_service_remove(struct btd_adapter *adapter, uint32_t handle)
+{
+	sdp_record_t *rec = sdp_record_find(handle);
+
+	DBG("%s", adapter->path);
+
+	if (!rec)
 		return;
 
-	remove_uuid(adapter, &rec->svclass);
+	adapter->services = sdp_list_remove(adapter->services, rec);
+
+	if (sdp_list_find(adapter->services, &rec->svclass, uuid_cmp) == NULL)
+		remove_uuid(adapter, &rec->svclass);
+
+	remove_record_from_server(rec->handle);
 }
 
 static struct btd_device *adapter_create_device(struct btd_adapter *adapter,
@@ -1890,7 +1909,8 @@ static void property_set_mode(struct btd_adapter *adapter, uint32_t setting,
 	case MGMT_SETTING_DISCOVERABLE:
 		memset(&cp, 0, sizeof(cp));
 		cp.val = mode;
-		cp.timeout = htobs(adapter->discoverable_timeout);
+		if (cp.val)
+			cp.timeout = htobs(adapter->discoverable_timeout);
 
 		opcode = MGMT_OP_SET_DISCOVERABLE;
 		param = &cp;
@@ -5603,8 +5623,6 @@ static int adapter_register(struct btd_adapter *adapter)
 		agent_unref(agent);
 	}
 
-	sdp_init_services_list(&adapter->bdaddr);
-
 	btd_adapter_gatt_server_start(adapter);
 
 	load_config(adapter);
@@ -5621,9 +5639,13 @@ static int adapter_register(struct btd_adapter *adapter)
 
 	adapter->initialized = TRUE;
 
-	if (main_opts.did_source)
+	if (main_opts.did_source) {
+		/* DeviceID record is added by sdpd-server before any other
+		 * record is registered. */
+		adapter_service_insert(adapter, sdp_record_find(0x10000));
 		set_did(adapter, main_opts.did_vendor, main_opts.did_product,
 				main_opts.did_version, main_opts.did_source);
+	}
 
 	DBG("Adapter %s registered", adapter->path);
 

@@ -1320,7 +1320,7 @@ static void server_remove(struct sap_server *server)
 
 	sap_server_remove_conn(server);
 
-	remove_record_from_server(server->record_id);
+	adapter_service_remove(server->adapter, server->record_id);
 
 	if (server->listen_io) {
 		g_io_channel_shutdown(server->listen_io, TRUE, NULL);
@@ -1360,7 +1360,7 @@ int sap_server_register(struct btd_adapter *adapter)
 		goto sdp_err;
 	}
 
-	if (add_record_to_server(adapter_get_address(adapter), record) < 0) {
+	if (adapter_service_add(adapter, record) < 0) {
 		error("Adding SAP SDP record to the SDP server failed.");
 		sdp_record_free(record);
 		goto sdp_err;

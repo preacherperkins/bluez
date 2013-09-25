@@ -1298,8 +1298,7 @@ struct a2dp_sep *a2dp_add_sep(struct btd_adapter *adapter, uint8_t type,
 		return NULL;
 	}
 
-	if (add_record_to_server(adapter_get_address(server->adapter),
-								record) < 0) {
+	if (adapter_service_add(server->adapter, record) < 0) {
 		error("Unable to register A2DP service record");
 		sdp_record_free(record);
 		avdtp_unregister_sep(sep->lsep);
@@ -1327,7 +1326,8 @@ void a2dp_remove_sep(struct a2dp_sep *sep)
 			return;
 		server->sources = g_slist_remove(server->sources, sep);
 		if (server->sources == NULL && server->source_record_id) {
-			remove_record_from_server(server->source_record_id);
+			adapter_service_remove(server->adapter,
+						server->source_record_id);
 			server->source_record_id = 0;
 		}
 	} else {
@@ -1335,7 +1335,8 @@ void a2dp_remove_sep(struct a2dp_sep *sep)
 			return;
 		server->sinks = g_slist_remove(server->sinks, sep);
 		if (server->sinks == NULL && server->sink_record_id) {
-			remove_record_from_server(server->sink_record_id);
+			adapter_service_remove(server->adapter,
+						server->sink_record_id);
 			server->sink_record_id = 0;
 		}
 	}
@@ -1944,7 +1945,8 @@ static void a2dp_source_server_remove(struct btd_profile *p,
 					(GDestroyNotify) a2dp_unregister_sep);
 
 	if (server->source_record_id) {
-		remove_record_from_server(server->source_record_id);
+		adapter_service_remove(server->adapter,
+					server->source_record_id);
 		server->source_record_id = 0;
 	}
 
@@ -1989,7 +1991,7 @@ static void a2dp_sink_server_remove(struct btd_profile *p,
 	g_slist_free_full(server->sinks, (GDestroyNotify) a2dp_unregister_sep);
 
 	if (server->sink_record_id) {
-		remove_record_from_server(server->sink_record_id);
+		adapter_service_remove(server->adapter, server->sink_record_id);
 		server->sink_record_id = 0;
 	}
 

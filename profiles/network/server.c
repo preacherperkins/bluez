@@ -587,7 +587,7 @@ static uint32_t register_server_record(struct network_server *ns)
 		return 0;
 	}
 
-	if (add_record_to_server(&ns->src, record) < 0) {
+	if (adapter_service_add(ns->na->adapter, record) < 0) {
 		error("Failed to register service record");
 		sdp_record_free(record);
 		return 0;
@@ -628,7 +628,7 @@ static void server_disconnect(DBusConnection *conn, void *user_data)
 	ns->watch_id = 0;
 
 	if (ns->record_id) {
-		remove_record_from_server(ns->record_id);
+		adapter_service_remove(ns->na->adapter, ns->record_id);
 		ns->record_id = 0;
 	}
 
@@ -722,7 +722,7 @@ static void server_free(void *data)
 	server_remove_sessions(ns);
 
 	if (ns->record_id)
-		remove_record_from_server(ns->record_id);
+		adapter_service_remove(ns->na->adapter, ns->record_id);
 
 	g_dbus_remove_watch(btd_get_dbus_connection(), ns->watch_id);
 	g_free(ns->name);

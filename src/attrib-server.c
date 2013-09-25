@@ -139,10 +139,11 @@ static void gatt_server_free(struct gatt_server *server)
 	g_slist_free_full(server->clients, (GDestroyNotify) channel_free);
 
 	if (server->gatt_sdp_handle > 0)
-		remove_record_from_server(server->gatt_sdp_handle);
+		adapter_service_remove(server->adapter,
+					server->gatt_sdp_handle);
 
 	if (server->gap_sdp_handle > 0)
-		remove_record_from_server(server->gap_sdp_handle);
+		adapter_service_remove(server->adapter, server->gap_sdp_handle);
 
 	if (server->adapter != NULL)
 		btd_adapter_unref(server->adapter);
@@ -326,8 +327,7 @@ static uint32_t attrib_create_sdp_new(struct gatt_server *server,
 				"http://www.bluez.org/");
 	}
 
-	if (add_record_to_server(adapter_get_address(server->adapter), record)
-			== 0)
+	if (adapter_service_add(server->adapter, record) == 0)
 		return record->handle;
 
 	sdp_record_free(record);
@@ -1378,9 +1378,9 @@ uint32_t attrib_create_sdp(struct btd_adapter *adapter, uint16_t handle,
 	return attrib_create_sdp_new(l->data, handle, name);
 }
 
-void attrib_free_sdp(uint32_t sdp_handle)
+void attrib_free_sdp(struct btd_adapter *adapter, uint32_t sdp_handle)
 {
-	remove_record_from_server(sdp_handle);
+	adapter_service_remove(adapter, sdp_handle);
 }
 
 static uint16_t find_uuid16_avail(struct btd_adapter *adapter, uint16_t nitems)
