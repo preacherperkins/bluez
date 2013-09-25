@@ -246,8 +246,8 @@ hci_set_adv_params (int hcidev)
 	adv_params_cp.chan_map	   = 0x07; /* all channels */
 	adv_params_cp.advtype	   = 0x00; /* Connectable undirected
 					    * advertising */
-	/* DBG ("hci adv data"); */
-	/* dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp)); */
+	DBG ("hci adv data");
+	dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp));
 
 	memset(&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
@@ -299,20 +299,23 @@ hci_set_adv_data (int hcidev, uint8_t data, const char *name)
 	offset += partsize + 1;
 
 	/* the local name to advertise */
-	if (name) {
+	if (0 && name && name[0] != '\0') {
 		unsigned strsize;
 		strsize = MIN(strlen(name),
-			      LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 3);
-		advdata_cp.data[offset + 0] = strsize + 1;
+			LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 3);
+		partsize = strsize + 1;
+		advdata_cp.data[offset + 0] = partsize;
 		advdata_cp.data[offset + 1] = 0x09;	/* local name */
 		memcpy (&advdata_cp.data[offset + 2], name, strsize);
-		offset += strsize + 2;
+		offset += partsize + 1;
+
+		DBG ("advertising name '%s'", name);
 	}
 
-	advdata_cp.length  = offset;
+	advdata_cp.length  = offset + 1;
 
-	/* DBG ("hci adv data"); */
-	/* dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp)); */
+	DBG ("hci adv data");
+	dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp));
 
 	memset (&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
@@ -356,10 +359,26 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 }
 
 
+
+static gboolean
+arc_attrib_update (ARCServer *self, ARCChar *achar, struct attribute **attr)
+{
+	return attrib_db_update (
+		self->adapter,
+		achar->val_handle,
+		NULL,
+		achar->val->data,
+		achar->val->len,
+		attr) == 0;
+}
+
+
 static void
 handle_blob (ARCServer *self, struct attribute *attr,
 	     struct btd_device *device, ARCChar *achar)
 {
+	DBG ("%s", __FUNCTION__);
+
 	if (g_strcmp0 (achar->uuidstr, ARC_REQUEST_UUID) == 0) {
 
 		int		 ret;
@@ -382,27 +401,22 @@ handle_blob (ARCServer *self, struct attribute *attr,
 		/* when processing the current method, clear any
 		 * existing result */
 		DBG ("clearing old results");
-		result_char = arc_char_table_find_by_uuid (
-			self->char_table, ARC_RESULT_UUID);
-		ret = attrib_db_update (
-			self->adapter,
-			result_char->val_handle,
-			NULL,(uint8_t*)NULL,
-			0, NULL);
-		if (ret != 0)
-			error ("failed to write attrib");
+		if (!arc_attrib_update (self, achar, &attr)) {
+			error ("failed to update attrib");
+			return;
+		}
 
-		request = g_strndup ((const char*)achar->val->data,
-				     achar->val->len);
+		request =  arc_char_get_value_string (achar);
+		if (!request)
+			request = g_strdup ("");
 
-		DBG ("emitting method-called");
+		DBG ("emitting method-called (%s)", request);
 		g_dbus_emit_signal (
 			btd_get_dbus_connection(),
 			adapter_get_path (self->adapter),
 			ARC_SERVER_IFACE, "MethodCalled",
 			DBUS_TYPE_OBJECT_PATH, &objpath,
-			DBUS_TYPE_STRING,
-			request,
+			DBUS_TYPE_STRING, &request,
 			DBUS_TYPE_INVALID);
 
 		g_free (request);
@@ -563,8 +577,7 @@ register_service (ARCServer *self)
 						ARC_JID_UUID);
 
 	rv = gatt_service_add (
-		self->adapter,
-		GATT_PRIM_SVC_UUID, &srv_uuid,
+		self->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
 
 		GATT_OPT_CHR_UUID, &req_char->uuid,
 		GATT_OPT_CHR_PROPS, req_char->gatt_props,
@@ -653,41 +666,42 @@ find_device_for_object_path (ARCServer *self, const char *obj_path)
 	return cbdata.device;
 }
 
-
-
 static int
 chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 {
 	int		 ret;
 	const unsigned	 chunksize = 20;
+	unsigned	 len;
 	guint8		*bytes, *cur;
 	char		*s;
 
 	/* wrap in 0xfe <data> 0xff */
-	bytes			   = g_new (guint8, achar->val->len + 2);
-	memcpy (bytes + 1, achar->val->data,
-		achar->val->len);
-
+	len   = achar->val->len + 2;
+	bytes = g_new (guint8, len);
+	memcpy (bytes + 1, achar->val->data, achar->val->len);
 	bytes[0]		   = ARC_GATT_BLURB_PRE;
 	bytes[achar->val->len + 1] = ARC_GATT_BLURB_POST;
+
 	ret			   = 0;
 	cur			   = bytes;
 
+
 	for (;;) {
 		size_t	size;
-		int	ret;
 
-		size = MIN(strlen(s), chunksize);
-
-		ret = attrib_db_update (
+		size = MIN(len, chunksize);
+		ret  = attrib_db_update (
 			self->adapter,
 			achar->val_handle,
 			NULL,
-			(uint8_t*)cur, size,
+			cur, len,
 			NULL);
 
 		if (ret != 0) {
-			error ("failed to write attrib");
+			char	*s;
+			s = g_strndup ((char*)cur, len);
+			error ("failed to update attrib ('%s')", s);
+			g_free (s);
 			break;
 		}
 
@@ -697,6 +711,7 @@ chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 			break; /* we're done */
 
 		cur += size;
+		len -= size;
 	}
 
 	g_free (bytes);
@@ -746,8 +761,7 @@ emit_event_method (DBusConnection *conn, DBusMessage *msg,
 
 
 static DBusMessage*
-submit_result_method (DBusConnection *conn, DBusMessage *msg,
-		      ARCServer *self)
+submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 {
 	DBusMessage		*reply;
 	const char		*results, *target_path;
@@ -770,30 +784,15 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg,
 	if (!device)
  		return btd_error_failed (msg, "could not find target");
 
-	result_achar = arc_char_table_find_by_uuid (
-		self->char_table, ARC_RESULT_UUID);
-	if (!result_achar) {
-		error ("cannot find result-char");
-		return btd_error_invalid_args (msg);
-	}
+	result_achar = arc_char_table_find_by_uuid (self->char_table,
+						ARC_RESULT_UUID);
+	if (!result_achar)
+ 		return btd_error_failed (msg, "could not find characteristic");
 
-	res = g_strndup ((const char*)result_achar->val->data,
-			 result_achar->val->len);
-	DBG ("submitting result '%s'", res);
-	g_free (res);
-
-	/* here, for writing, chunking is not necessary. Or? */
-	ret = attrib_db_update (
-		self->adapter,
-		result_achar->val_handle,
-		NULL,
-		result_achar->val->data,
-		result_achar->val->len,
-		NULL);
-
-	if (ret != 0)
+	if (!arc_attrib_update (self, result_achar, NULL)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
+	}
 
 	if (!(reply = dbus_message_new_method_return (msg)))
 		return btd_error_failed (msg, "error creating DBus reply");
@@ -1128,7 +1127,7 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 static int
 get_hci_device (ARCServer *self, int hcisock)
 {
-	int			hcidev;
+	int			hcidev, fd;
 	struct hci_dev_info	devinfo;
 
 	devinfo.dev_id = btd_adapter_get_index (self->adapter);
@@ -1137,18 +1136,16 @@ get_hci_device (ARCServer *self, int hcisock)
 		return -1;
 	}
 
+	devinfo.flags = HCI_RAW;
+
 	if (ioctl (hcisock, HCIGETDEVINFO, (void*)&devinfo) != 0) {
 		error ("can't get hci socket");
 		return -1;
 	}
 
-	if (hci_test_bit (HCI_RAW, &devinfo.flags) &&
-	    bacmp(&devinfo.bdaddr, BDADDR_ANY) == 0) {
-		int fd;
-		fd = hci_open_dev (devinfo.dev_id);
-		hci_read_bd_addr(fd, &devinfo.bdaddr, 1000);
-		hci_close_dev(fd);
-	}
+	fd = hci_open_dev (devinfo.dev_id);
+	hci_read_bd_addr(fd, &devinfo.bdaddr, 1000);
+	hci_close_dev(fd);
 
 	hcidev = hci_open_dev (devinfo.dev_id);
 	if (hcidev < 0) {
@@ -1193,7 +1190,7 @@ enable_adv (ARCServer *self, gboolean enable)
 
 	if (enable /* ie, if we're currently disabled */) {
 		ret = hci_set_adv_params (hcidev);
-		if (ret < 0) {
+		if (ret != 0) {
 			error ("setting adv params failed (%d)", ret);
 			goto leave;
 		}
@@ -1209,7 +1206,7 @@ enable_adv (ARCServer *self, gboolean enable)
 	 * advertising... */
 	ret = hci_set_adv_data (hcidev, self->magic,
 				btd_adapter_get_name (self->adapter));
-	if (ret < 0) {
+	if (ret != 0) {
 		error ("setting arc data failed (%d)", ret);
 		goto leave;
 	}

@@ -91,10 +91,6 @@ arc_char_table_new (void)
 		char_table,
 		ARC_JID_UUID, "JID",
 		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
-	arc_char_table_add_char (
-		char_table,
-		ARC_TARGET_UUID, "Target",
-		ARC_CHAR_FLAG_READABLE | ARC_CHAR_FLAG_WRITABLE);
 
 	return char_table;
 }
