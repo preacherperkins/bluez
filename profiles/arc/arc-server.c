@@ -59,8 +59,7 @@
 
 #include "arc.h"
 
-#define CLIENT_TIMEOUT 10 /*seconds*/
-#define AUTO_DISCONNECT
+#define CLIENT_TIMEOUT 5 /*seconds*/
 
 static GSList *ARC_SERVERS = NULL;
 
@@ -85,32 +84,36 @@ each_device_disconnect (struct btd_device *device, void *data)
 	if (!device_is_connected (device))
 		return;
 
+	DBG ("arc: automatically disconnecting");
 	btd_adapter_disconnect_device (self->adapter,
 				       device_get_address(device),
 				       BDADDR_LE_PUBLIC);
 }
 
+static gboolean
+do_disconnect (ARCServer *self)
+{
+	g_timeout_add (1000, (GSourceFunc)do_enable_adv, self);
+	btd_adapter_for_each_device (self->adapter,
+				     each_device_disconnect, self);
+	return FALSE;
+}
 
 static void
-on_disconnected (uint16_t index, uint16_t length,
+on_connection_event (uint16_t index, uint16_t length,
 		 const void *param, ARCServer *self)
 {
+	DBG ("connected/disconnected now, client has %d seconds before auto-disconnect",
+		CLIENT_TIMEOUT);
+
 	/* make sure it's really disconnected */
 	btd_adapter_for_each_device (self->adapter,
 				     each_device_disconnect, self);
 
-	/* re-enable advertising, since the connection turned it off */
-	enable_adv (self,TRUE);
+	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
+			self);
 }
 
-
-
-static void
-on_connected (uint16_t index, uint16_t length,
-		 const void *param, ARCServer *self)
-{
-	DBG ("%s", __FUNCTION__);
-}
 
 
 ARCServer*
@@ -130,11 +133,11 @@ arc_server_new (struct btd_adapter *adapter)
 	self->mgmt = mgmt_new_default ();
 	mgmt_register(self->mgmt, MGMT_EV_DEVICE_DISCONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_disconnected, self, NULL);
+		      (mgmt_notify_func_t)on_connection_event, self, NULL);
 
 	mgmt_register(self->mgmt, MGMT_EV_DEVICE_CONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_connected, self, NULL);
+		      (mgmt_notify_func_t)on_connection_event, self, NULL);
 
 	return self;
 }
@@ -423,35 +426,6 @@ handle_blob (ARCServer *self, struct attribute *attr,
 	}
 }
 
-static gboolean
-do_disconnect (ARCServer *self)
-{
-#ifdef AUTO_DISCONNECT
-	DBG ("automatically disconnecting");
-	g_timeout_add (1000, (GSourceFunc)do_enable_adv, self);
-	btd_adapter_for_each_device (self->adapter,
-				     each_device_disconnect, self);
-#endif /*AUIO_DISCONNECT*/
-	return FALSE;
-}
-
-
-
-/* when AUTO_DISCONNECT is defined (see do_disconnect), disconnect
- * clients after a certain inactive period; this is needed to ensure
- * the device is able to service other devices too
- */
-static void
-update_disconnect_timeouts (ARCServer *self, struct btd_device *device)
-{
-	if (self->disc_id != 0)
-		g_source_remove (self->disc_id);
-
-	self->disc_id  =
-		g_timeout_add_seconds (
-			CLIENT_TIMEOUT,
-			(GSourceFunc)do_disconnect, self);
-}
 
 static uint8_t
 attr_arc_server_write (struct attribute *attr, struct btd_device *device,
@@ -461,7 +435,6 @@ attr_arc_server_write (struct attribute *attr, struct btd_device *device,
 	unsigned	 u;
 
 	DBG ("writing handle 0x%04x", attr->handle);
-	update_disconnect_timeouts (self, device);
 
 	achar = arc_char_table_find_by_attr (self->char_table, attr);
 	if (!achar) {
@@ -548,7 +521,6 @@ attr_arc_server_read (struct attribute	*attr,
 	attr->len  = len;
 
 	DBG ("reading handle 0x%04x", attr->handle);
-	update_disconnect_timeouts (self, device);
 
 	return 0;
 }
@@ -891,8 +863,10 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 		g_free (blurb);
 	} else if (!(reply = dbus_message_new_method_return (msg)))
 		reply = btd_error_failed (msg, "error creating DBus reply");
-	else
+	else {
+		DBG ("arc: %sable advertising", enable ? "en" : "dis");
 		dbus_message_append_args(reply, DBUS_TYPE_INVALID);
+	}
 
 	return reply;
 }
@@ -936,12 +910,9 @@ magic_property_get (const GDBusPropertyTable *property,
 
 
 
-
-
-
 static void
 gatt_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
-	      GDBusPendingPropertySet id, ARCServer *aserver)
+		GDBusPendingPropertySet id, ARCServer *aserver)
 {
 	ARCChar		*achar;
 	const char	*str;
@@ -1175,8 +1146,6 @@ enable_adv (ARCServer *self, gboolean enable)
 
 	rv     = FALSE;
 	hcidev = hcisock = -1;
-
-	DBG ("attempt to %sable advertising", enable ? "en" : "dis");
 
 	hcisock = socket (AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
 	if (hcisock < 0)  {
