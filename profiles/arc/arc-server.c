@@ -85,15 +85,14 @@ each_device_disconnect (struct btd_device *device, void *data)
 		return;
 
 	DBG ("arc: automatically disconnecting");
-	btd_adapter_disconnect_device (self->adapter,
-				       device_get_address(device),
-				       BDADDR_LE_PUBLIC);
+	/* btd_adapter_disconnect_device (self->adapter, */
+	/* 			       device_get_address(device), */
+	/* 			       BDADDR_LE_PUBLIC); */
 }
 
 static gboolean
 do_disconnect (ARCServer *self)
 {
-	g_timeout_add (1000, (GSourceFunc)do_enable_adv, self);
 	btd_adapter_for_each_device (self->adapter,
 				     each_device_disconnect, self);
 	return FALSE;
@@ -103,12 +102,9 @@ static void
 on_connection_event (uint16_t index, uint16_t length,
 		 const void *param, ARCServer *self)
 {
-	DBG ("connected/disconnected now, client has %d seconds before auto-disconnect",
+	DBG ("connected/disconnected now, client has %d seconds "
+		"before auto-disconnect",
 		CLIENT_TIMEOUT);
-
-	/* make sure it's really disconnected */
-	btd_adapter_for_each_device (self->adapter,
-				     each_device_disconnect, self);
 
 	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
 			self);
@@ -1139,10 +1135,11 @@ get_hci_device (ARCServer *self, int hcisock)
 static gboolean
 enable_adv (ARCServer *self, gboolean enable)
 {
-	gboolean				 rv;
-	struct hci_dev_info			 devinfo;
-	struct hci_request			 rq;
-	int					 hcisock, hcidev, ret;
+	gboolean		rv;
+	struct hci_dev_info	devinfo;
+	struct hci_request	rq;
+	int			hcisock, hcidev, ret;
+	uint8_t byte[] = { 0x0 };
 
 	rv     = FALSE;
 	hcidev = hcisock = -1;
@@ -1171,10 +1168,16 @@ enable_adv (ARCServer *self, gboolean enable)
 		goto leave;
 	}
 
-	/* it seems we need to set this each time after enabling
-	 * advertising... */
-	ret = hci_set_adv_data (hcidev, self->magic,
-				btd_adapter_get_name (self->adapter));
+	/* byte[0] = enable ? 0x01 : 0x00; */
+	/* if (mgmt_send (self->mgmt, MGMT_OP_SET_ADVERTISING, */
+	/* 		btd_adapter_get_index (self->adapter), */
+	/* 		sizeof(byte), byte, NULL, NULL, NULL) != 0) { */
+	/* 	error ("could not %sable advertising", */
+	/* 		enable ? "en" : "dis"); */
+	/* } */
+	ret = hci_set_adv_data (
+		hcidev, self->magic,
+		btd_adapter_get_name (self->adapter));
 	if (ret != 0) {
 		error ("setting arc data failed (%d)", ret);
 		goto leave;
