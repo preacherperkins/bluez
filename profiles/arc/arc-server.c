@@ -59,7 +59,7 @@
 
 #include "arc.h"
 
-#define CLIENT_TIMEOUT 5 /*seconds*/
+#define CLIENT_TIMEOUT 10 /*seconds*/
 
 static GSList *ARC_SERVERS = NULL;
 
@@ -302,13 +302,13 @@ hci_set_adv_data (int hcidev, uint8_t data, const char *name)
 	offset += partsize + 1;
 
 	/* the local name to advertise */
-	if (0 && name && name[0] != '\0') {
+	if (name && name[0] != '\0') {
 		unsigned strsize;
 		strsize = MIN(strlen(name),
-			LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 3);
+			      LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 4);
 		partsize = strsize + 1;
 		advdata_cp.data[offset + 0] = partsize;
-		advdata_cp.data[offset + 1] = 0x09;	/* local name */
+		advdata_cp.data[offset + 1] = 0x08;	/* short local name */
 		memcpy (&advdata_cp.data[offset + 2], name, strsize);
 		offset += partsize + 1;
 
