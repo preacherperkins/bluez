@@ -360,7 +360,7 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 
 
 static gboolean
-arc_attrib_update (ARCServer *self, ARCChar *achar, struct attribute **attr)
+arc_attrib_update (ARCServer *self, ARCChar *achar)
 {
 	return attrib_db_update (
 		self->adapter,
@@ -368,7 +368,7 @@ arc_attrib_update (ARCServer *self, ARCChar *achar, struct attribute **attr)
 		NULL,
 		achar->val->data,
 		achar->val->len,
-		attr) == 0;
+		NULL) == 0;
 }
 
 
@@ -400,12 +400,12 @@ handle_blob (ARCServer *self, struct attribute *attr,
 		/* when processing the current method, clear any
 		 * existing result */
 		DBG ("clearing old results");
-		if (!arc_attrib_update (self, achar, &attr)) {
+		if (!arc_attrib_update (self, achar)) {
 			error ("failed to update attrib");
 			return;
 		}
 
-		request =  arc_char_get_value_string (achar);
+		request = arc_char_get_value_string (achar);
 		if (!request)
 			request = g_strdup ("");
 
@@ -757,7 +757,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
-	if (!arc_attrib_update (self, result_achar, NULL)) {
+	if (!arc_attrib_update (self, result_achar)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
 	}
