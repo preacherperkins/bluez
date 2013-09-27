@@ -292,8 +292,8 @@ hci_set_adv_data (int hcidev, uint8_t data, const char *name)
 	partsize = 4;
 	advdata_cp.data[offset + 0] = partsize;
 	advdata_cp.data[offset + 1] = 0xff; /* manufacturer-specific data; */
-	advdata_cp.data[offset + 2] = 0x00;  /* Unknown */
-	advdata_cp.data[offset + 3] = 0xf3;  /* Vendor */
+	advdata_cp.data[offset + 2] = 0xf2;  /* Unknown */
+	advdata_cp.data[offset + 3] = 0x00;  /* Vendor */
 	advdata_cp.data[offset + 4] = data;
 	offset += partsize + 1;
 
