@@ -47,7 +47,7 @@ typedef enum {
  */
 struct ARCChar {
 	char		*name;
-	GByteArray	*val;
+	GByteArray	*val, *val_scratch;
 	guint16		 handle;
 	guint16		 val_handle;
 	ARCCharFlags     flags;
@@ -56,6 +56,8 @@ struct ARCChar {
 	guint		 gatt_props;
 	gboolean	 writing;
 
+	/* we need to keep these for attrib... */
+	char		 data[ATT_MAX_VALUE_LEN];
 };
 typedef struct ARCChar	 ARCChar;
 
@@ -76,6 +78,16 @@ void arc_char_set_value_string (ARCChar *achar, const char *str);
  * @return the string (free with g_free)
  */
 char* arc_char_get_value_string (ARCChar *achar);
+
+
+/**
+ * Clear the scratch-val, and copy the val's data into it
+ *
+ * @param achar
+ * @param copy whether to copy val into scratch
+ */
+void arc_char_init_scratch (ARCChar *achar, gboolean copy);
+
 
 /**
  * Create a new hashtable for UUID->ARCChars; free with
@@ -130,6 +142,17 @@ ARCChar* arc_char_table_find_by_attr (GHashTable *table,
  */
 ARCChar* arc_char_table_find_by_name (GHashTable *table,
 				      const char *name);
+
+
+
+/**
+ * Clear all working data such as half-written chunked data
+ *
+ * @param table
+ */
+void arc_char_table_clear_working_data (GHashTable *table);
+
+
 
 #define ARC_GATT_BLURB_PRE  0xfe
 /**< prefix for an ARC blurb */

@@ -85,9 +85,9 @@ each_device_disconnect (struct btd_device *device, void *data)
 		return;
 
 	DBG ("arc: automatically disconnecting");
-	/* btd_adapter_disconnect_device (self->adapter, */
-	/* 			       device_get_address(device), */
-	/* 			       BDADDR_LE_PUBLIC); */
+	btd_adapter_disconnect_device (self->adapter,
+				       device_get_address(device),
+				       BDADDR_LE_PUBLIC);
 }
 
 static gboolean
@@ -108,6 +108,9 @@ on_connection_event (uint16_t index, uint16_t length,
 
 	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
 			self);
+
+	/* clear out any connection-specific data */
+	arc_char_table_clear_working_data (self->char_table);
 }
 
 
@@ -137,6 +140,8 @@ arc_server_new (struct btd_adapter *adapter)
 
 	return self;
 }
+
+
 
 static void
 arc_server_destroy (ARCServer *self)
@@ -360,15 +365,23 @@ hci_set_adv_enable (int hcidev, gboolean enable)
 
 
 static gboolean
-arc_attrib_update (ARCServer *self, ARCChar *achar)
+arc_attrib_db_update (ARCServer *self, ARCChar *achar)
 {
-	return attrib_db_update (
-		self->adapter,
-		achar->val_handle,
-		NULL,
-		achar->val->data,
-		achar->val->len,
-		NULL) == 0;
+	int ret;
+
+	ret = attrib_db_update (self->adapter,
+				achar->val_handle,
+				NULL,
+				achar->val->data,
+				achar->val->len,
+				NULL);
+	if (ret != 0) {
+		error ("failed to write attribute: %s",
+		       strerror (-ret));
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 
@@ -400,7 +413,7 @@ handle_blob (ARCServer *self, struct attribute *attr,
 		/* when processing the current method, clear any
 		 * existing result */
 		DBG ("clearing old results");
-		if (!arc_attrib_update (self, achar)) {
+		if (!arc_attrib_db_update (self, achar)) {
 			error ("failed to update attrib");
 			return;
 		}
@@ -443,6 +456,8 @@ attr_arc_server_write (struct attribute *attr, struct btd_device *device,
 		return 0;
 	}
 
+	DBG ("%s: %s", __FUNCTION__, achar->name);
+
 	/* if we see 0xfe, we start from scratch;
 	 * otherwise, accumulate until we see 0xff*/
 	for (u = 0; u != attr->len; ++u) {
@@ -472,7 +487,6 @@ attr_arc_server_read (struct attribute	*attr,
 {
 	ARCChar		*achar;
 	ARCID		 id;
-	char		 str[ATT_MAX_VALUE_LEN];
 	size_t		 len;
 	const guint	 BLE_MAXLEN = 19; /* empirically derived */
 
@@ -487,33 +501,41 @@ attr_arc_server_read (struct attribute	*attr,
 		return 0;
 	}
 
+	DBG ("%s: %s (%u)",
+	     __FUNCTION__, achar->name, achar->writing);
+
 	/* write in chunks; this is an ugly workaround because bluez
 	 * cannot do long-writes (2013.09.20) */
-	len = MIN (BLE_MAXLEN, achar->val->len);
+	if (!achar->writing) /* copy the characteristic to our scratchpad */
+		arc_char_init_scratch (achar, TRUE/*copy*/);
+
+	len = MIN (BLE_MAXLEN, achar->val_scratch->len);
 
 	/* we just start with this value; set the beginning-of-data
 	 * token (length is one less) */
 	if (!achar->writing) {
-		str[0] = ARC_GATT_BLURB_PRE;	/* the token for begin-of-data */
+		achar->data[0] = ARC_GATT_BLURB_PRE;	/* the token for begin-of-data */
 		if (len > 0) { /* copy a chunk  and remove it */
-			memcpy (str + 1, achar->val->data, len - 1);
+			memcpy (&achar->data[1],
+				achar->val_scratch->data, len - 1);
 			g_byte_array_remove_range (
-				achar->val, 0, len - 1);
+				achar->val_scratch, 0, len - 1);
 		}
 		achar->writing = TRUE;
-	} else { /* we're in the middle */
-		memcpy (str, achar->val->data, len);
-		g_byte_array_remove_range (achar->val, 0, len);
+	} else if (len > 0) { /* we're in the middle */
+		memcpy (achar->data, achar->val_scratch->data, len);
+		g_byte_array_remove_range (achar->val_scratch, 0, len);
 	}
 
 	/* we're at the end? check if there's space left; if not, this
 	 * goes with the next read */
-	if (achar->val->len == 0 && len < BLE_MAXLEN) {
-		str[len]       = ARC_GATT_BLURB_POST;
-		achar->writing = FALSE;
+	if (achar->val_scratch->len == 0 && len < BLE_MAXLEN) {
+		achar->data[len] = ARC_GATT_BLURB_POST;
+		achar->writing	 = FALSE;
+		arc_char_init_scratch (achar, FALSE/*don't copy*/);
 	}
 
-	attr->data = (uint8_t*)str;
+	attr->data = (uint8_t*)achar->data;
 	attr->len  = len;
 
 	DBG ("reading handle 0x%04x", attr->handle);
@@ -656,23 +678,11 @@ chunked_attrib_db_update (ARCServer *self, ARCChar *achar)
 
 	for (;;) {
 		size_t	size;
-
 		size = MIN(len, chunksize);
-		ret  = attrib_db_update (
-			self->adapter,
-			achar->val_handle,
-			NULL,
-			cur, len,
-			NULL);
-
-		if (ret != 0) {
-			char	*s;
-			s = g_strndup ((char*)cur, len);
-			error ("failed to update attrib ('%s')", s);
-			g_free (s);
+		if (!arc_attrib_db_update (self, achar)) {
+			error ("failed to update attrib ('%s')", achar->name);
 			break;
 		}
-
 		DBG ("written chunk (%u octets)", size);
 
 		if (size < chunksize)
@@ -757,7 +767,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
-	if (!arc_attrib_update (self, result_achar)) {
+	if (!arc_attrib_db_update (self, result_achar)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
 	}
@@ -908,7 +918,7 @@ magic_property_get (const GDBusPropertyTable *property,
 
 static void
 gatt_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
-		GDBusPendingPropertySet id, ARCServer *aserver)
+		   GDBusPendingPropertySet id, ARCServer *aserver)
 {
 	ARCChar		*achar;
 	const char	*str;

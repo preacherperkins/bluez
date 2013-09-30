@@ -55,9 +55,28 @@ free_arch_char (ARCChar *achar)
 
 	if (achar->val)
 		g_byte_array_unref (achar->val);
+	if (achar->val_scratch)
+		g_byte_array_unref (achar->val_scratch);
 
 	g_free (achar);
 }
+
+
+void
+arc_char_init_scratch (ARCChar *achar, gboolean copy)
+{
+	/* remove old garbage */
+	if (achar->val_scratch->len)
+		g_byte_array_remove_range (
+			achar->val_scratch, 0, achar->val_scratch->len);
+
+	/* copy from val */
+	if (copy && achar->val->len)
+		g_byte_array_append (achar->val_scratch,
+				     achar->val->data, achar->val->len);
+}
+
+
 
 
 GHashTable*
@@ -107,9 +126,10 @@ arc_char_table_add_char (GHashTable *table,
 	g_return_val_if_fail (uuidstr, NULL);
 	g_return_val_if_fail (name, NULL);
 
-	achar	       = g_new0 (ARCChar, 1);
-	achar->name    = g_strdup (name);
-	achar->val     = g_byte_array_new ();
+	achar		   = g_new0 (ARCChar, 1);
+	achar->name	   = g_strdup (name);
+	achar->val	   = g_byte_array_new ();
+	achar->val_scratch = g_byte_array_new ();
 
 	achar->uuidstr = g_strdup (uuidstr);
 	bt_string_to_uuid (&achar->uuid, achar->uuidstr);
@@ -175,6 +195,24 @@ arc_char_table_find_by_name (GHashTable *table, const char *name)
 			return achar;
 
 	return NULL;
+}
+
+
+void
+arc_char_table_clear_working_data (GHashTable *table)
+{
+	GHashTableIter	 iter;
+	const char	*uuidstr;
+	ARCChar		*achar;
+
+	g_return_if_fail (table);
+
+	g_hash_table_iter_init (&iter, table);
+	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
+				       (gpointer)&achar)) {
+		arc_char_init_scratch (achar, FALSE/*don't copy*/);
+		achar->writing = FALSE;
+	}
 }
 
 
