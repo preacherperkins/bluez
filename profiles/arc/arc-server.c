@@ -203,7 +203,7 @@ find_arc_server_from_service (struct btd_service *service)
 
 	device	= btd_service_get_device (service);
 	adapter	= device_get_adapter (device);
-	self = find_arc_server (adapter);
+	self	= find_arc_server (adapter);
 
 	return self;
 }
@@ -531,6 +531,7 @@ attr_arc_server_read (struct attribute	*attr,
 	 * goes with the next read */
 	if (achar->val_scratch->len == 0 && len < BLE_MAXLEN) {
 		achar->data[len] = ARC_GATT_BLURB_POST;
+		len += 1;
 		achar->writing	 = FALSE;
 		arc_char_init_scratch (achar, FALSE/*don't copy*/);
 	}
@@ -1080,6 +1081,9 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 {
 	GSList		*cur;
 	ARCServer	*self;
+	GHashTableIter	 iter;
+	ARCChar		*achar;
+	const char	*uuidstr;
 
 	self = find_arc_server (adapter);
 	if (!self)
@@ -1089,6 +1093,16 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 				    adapter_get_path (adapter),
 				    ARC_SERVER_IFACE);
 
+	/* make sure to delete the attribute, otherwise
+	 * bluez will try to remove them after we're gone already */
+	g_hash_table_iter_init (&iter, self->char_table);
+	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
+				       (gpointer)&achar)) {
+		attrib_db_update (self->adapter,
+				  achar->val_handle, NULL,
+				  NULL, 0, NULL);
+		attrib_db_del (self->adapter, achar->val_handle);
+	}
 	arc_server_destroy (self);
 }
 

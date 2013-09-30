@@ -217,6 +217,7 @@ arc_char_table_clear_working_data (GHashTable *table)
 
 
 
+
 void
 arc_char_set_value_string (ARCChar *achar, const char *str)
 {
