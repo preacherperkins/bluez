@@ -338,6 +338,7 @@ hci_set_adv_data (int hcidev, uint8_t data, const char *name)
 }
 
 
+
 static gboolean
 hci_set_adv_enable (int hcidev, gboolean enable)
 {
@@ -384,7 +385,15 @@ arc_attrib_db_update (ARCServer *self, ARCChar *achar)
 		error ("failed to write attribute: %s",
 		       strerror (-ret));
 		return FALSE;
-	}
+	} else if (achar->val->len == 0)
+		DBG ("%s: clearing attr %s",
+			__FUNCTION__, achar->name);
+	else
+		DBG ("%s: written attr %s [%s] (%d)",
+			__FUNCTION__,
+			achar->name,
+			(const char *)achar->val->data,
+			achar->val->len);
 
 	return TRUE;
 }
@@ -402,7 +411,8 @@ arc_attrib_db_clear (ARCServer *self, ARCChar *achar)
 		error ("failed to write attribute: %s",
 		       strerror (-ret));
 		return FALSE;
-	}
+	} else
+		DBG ("%s: cleared attr %s", achar->name);
 
 	return TRUE;
 }
@@ -448,7 +458,6 @@ handle_blob (ARCServer *self, struct attribute *attr,
 			request = g_strdup ("");
 
 		DBG ("emitting method-called (%s)", request);
-		DBG ("params: %s", request);
 
 		g_dbus_emit_signal (
 			btd_get_dbus_connection(),
@@ -541,6 +550,7 @@ attr_arc_server_read (struct attribute	*attr,
 	/* we just start with this value; set the beginning-of-data
 	 * token (length is one less) */
 	if (!achar->writing) {
+		DBG ("%s: writing start blurb (%s)", __FUNCTION__, achar->name);
 		achar->data[0] = ARC_GATT_BLURB_PRE;	/* the token for begin-of-data */
 		if (len > 0) { /* copy a chunk  and remove it */
 			memcpy (&achar->data[1],
@@ -550,6 +560,7 @@ attr_arc_server_read (struct attribute	*attr,
 		}
 		achar->writing = TRUE;
 	} else if (len > 0) { /* we're in the middle */
+		DBG ("%s: writing middle blurb (%s)", __FUNCTION__, achar->name);
 		memcpy (achar->data, achar->val_scratch->data, len);
 		g_byte_array_remove_range (achar->val_scratch, 0, len);
 	}
@@ -557,6 +568,7 @@ attr_arc_server_read (struct attribute	*attr,
 	/* we're at the end? check if there's space left; if not, this
 	 * goes with the next read */
 	if (achar->val_scratch->len == 0 && len < BLE_MAXLEN) {
+		DBG ("%s: writing end blurb (%s)", __FUNCTION__, achar->name);
 		achar->data[len] = ARC_GATT_BLURB_POST;
 		len += 1;
 		achar->writing	 = FALSE;
@@ -795,7 +807,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
-	DBG ("%s: updating with %s", __FUNCTION__, results);
+	DBG ("%s: updating with [%s]", __FUNCTION__, results);
 	if (!arc_attrib_db_update (self, result_achar)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
@@ -1176,6 +1188,51 @@ get_hci_device (ARCServer *self, int hcisock)
 }
 
 
+
+static void
+disco_callback (uint8_t status, uint16_t len, const void *param,
+		void *user_data)
+{
+	if (status == 0) {
+		DBG ("disco started/stopped");
+		return;
+	}
+
+	g_debug ("Unable to start/stop discovery. status 0x%02x (%s)",
+		status, mgmt_errstr(status));
+}
+
+static void
+enable_discovery (ARCServer *aserver, gboolean enable)
+{
+	struct mgmt_cp_start_discovery	cp;
+	uint8_t				type;
+	int res;
+
+	type = 0;
+	hci_clear_bit (BDADDR_BREDR, &type);
+	hci_set_bit   (BDADDR_LE_PUBLIC, &type);
+	hci_set_bit   (BDADDR_LE_RANDOM, &type);
+
+	cp.type = type;
+
+	if (enable)
+		res = mgmt_send (aserver->mgmt, MGMT_OP_START_DISCOVERY,
+				btd_adapter_get_index (aserver->adapter),
+				sizeof(cp), &cp, disco_callback,
+				NULL, NULL);
+	else
+		res = mgmt_send (aserver->mgmt, MGMT_OP_STOP_DISCOVERY,
+				btd_adapter_get_index (aserver->adapter),
+				sizeof(cp), &cp, disco_callback,
+				NULL, NULL);
+
+	if (res != 0)
+		error ("%s disco failed",
+			enable ? "starting" : "stopping");
+}
+
+
 /**
  * Enable/Disable advertising using the HCI-interface
  *
@@ -1214,19 +1271,16 @@ enable_adv (ARCServer *self, gboolean enable)
 		}
 	}
 
+	/* /\* when enabling advertising, disable discovery  *\/ */
+	/* if (enable) */
+	/* 	enable_discovery (self, FALSE); */
+
 	if (!hci_set_adv_enable (hcidev, enable)) {
 		error ("failed to %sable advertising",
 		       enable ? "en" : "dis");
 		goto leave;
 	}
 
-	/* byte[0] = enable ? 0x01 : 0x00; */
-	/* if (mgmt_send (self->mgmt, MGMT_OP_SET_ADVERTISING, */
-	/* 		btd_adapter_get_index (self->adapter), */
-	/* 		sizeof(byte), byte, NULL, NULL, NULL) != 0) { */
-	/* 	error ("could not %sable advertising", */
-	/* 		enable ? "en" : "dis"); */
-	/* } */
 	ret = hci_set_adv_data (
 		hcidev, self->magic,
 		btd_adapter_get_name (self->adapter));
@@ -1242,6 +1296,10 @@ leave:
 
 	if (hcisock >= 0)
 		close (hcisock);
+
+	/* when disabling advertising, enable discovery  */
+	/* if (!enable) */
+	/* 	enable_discovery (self, FALSE); */
 
 	return rv;
 }
