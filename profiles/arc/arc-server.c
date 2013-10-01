@@ -388,12 +388,6 @@ arc_attrib_db_update (ARCServer *self, ARCChar *achar)
 	} else if (achar->val->len == 0)
 		DBG ("%s: clearing attr %s",
 			__FUNCTION__, achar->name);
-	else
-		DBG ("%s: written attr %s [%s] (%d)",
-			__FUNCTION__,
-			achar->name,
-			(const char *)achar->val->data,
-			achar->val->len);
 
 	return TRUE;
 }
@@ -537,13 +531,14 @@ attr_arc_server_read (struct attribute	*attr,
 		return 0;
 	}
 
-	DBG ("%s: %s (%u)",
-	     __FUNCTION__, achar->name, achar->writing);
-
 	/* write in chunks; this is an ugly workaround because bluez
 	 * cannot do long-writes (2013.09.20) */
 	if (!achar->writing) /* copy the characteristic to our scratchpad */
 		arc_char_init_scratch (achar, TRUE/*copy*/);
+
+	DBG ("%s: %s (%u byte(s), %u bytes(s) left)",
+		__FUNCTION__, achar->name, achar->val->len,
+		achar->val_scratch->len);
 
 	len = MIN (BLE_MAXLEN, achar->val_scratch->len);
 
@@ -567,7 +562,7 @@ attr_arc_server_read (struct attribute	*attr,
 
 	/* we're at the end? check if there's space left; if not, this
 	 * goes with the next read */
-	if (achar->val_scratch->len == 0 && len < BLE_MAXLEN) {
+	if (len < BLE_MAXLEN) {
 		DBG ("%s: writing end blurb (%s)", __FUNCTION__, achar->name);
 		achar->data[len] = ARC_GATT_BLURB_POST;
 		len += 1;
@@ -806,6 +801,8 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 						ARC_RESULT_UUID);
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
+
+	arc_char_set_value_string (result_achar, results);
 
 	DBG ("%s: updating with [%s]", __FUNCTION__, results);
 	if (!arc_attrib_db_update (self, result_achar)) {
