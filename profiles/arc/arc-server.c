@@ -448,6 +448,8 @@ handle_blob (ARCServer *self, struct attribute *attr,
 			request = g_strdup ("");
 
 		DBG ("emitting method-called (%s)", request);
+		DBG ("params: %s", request);
+
 		g_dbus_emit_signal (
 			btd_get_dbus_connection(),
 			adapter_get_path (self->adapter),
@@ -786,13 +788,14 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 
 	device = find_device_for_object_path (self, target_path);
 	if (!device)
- 		return btd_error_failed (msg, "could not find target");
+		return btd_error_failed (msg, "could not find target");
 
 	result_achar = arc_char_table_find_by_uuid (self->char_table,
 						ARC_RESULT_UUID);
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
+	DBG ("%s: updating with %s", results);
 	if (!arc_attrib_db_update (self, result_achar)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
