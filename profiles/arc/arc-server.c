@@ -562,7 +562,7 @@ attr_arc_server_read (struct attribute	*attr,
 
 	/* we're at the end? check if there's space left; if not, this
 	 * goes with the next read */
-	if (len < BLE_MAXLEN) {
+	if (achar->val_scratch->len == 0 && len < BLE_MAXLEN) {
 		DBG ("%s: writing end blurb (%s)", __FUNCTION__, achar->name);
 		achar->data[len] = ARC_GATT_BLURB_POST;
 		len += 1;
