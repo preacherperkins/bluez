@@ -50,6 +50,8 @@ free_arch_char (ARCChar *achar)
 	if (!achar)
 		return;
 
+	DBG ("freeing %s", achar->name);
+
 	g_free (achar->name);
 	g_free (achar->uuidstr);
 
@@ -86,8 +88,7 @@ arc_char_table_new (void)
 
 	char_table = g_hash_table_new_full (
 		g_str_hash, g_str_equal,
-		(GDestroyNotify)g_free,
-		(GDestroyNotify)free_arch_char);
+		NULL, (GDestroyNotify)free_arch_char);
 
 	/* my characteristics */
 	arc_char_table_add_char (
@@ -128,13 +129,12 @@ arc_char_table_add_char (GHashTable *table,
 
 	achar		   = g_new0 (ARCChar, 1);
 	achar->name	   = g_strdup (name);
+	achar->uuidstr	   = g_strdup (uuidstr);
 	achar->val	   = g_byte_array_new ();
 	achar->val_scratch = g_byte_array_new ();
+	achar->flags	   = flags;
 
-	achar->uuidstr = g_strdup (uuidstr);
 	bt_string_to_uuid (&achar->uuid, achar->uuidstr);
-
-	achar->flags = flags;
 
 	achar->gatt_props = 0;
 	if (achar->flags & ARC_CHAR_FLAG_READABLE)
@@ -142,7 +142,7 @@ arc_char_table_add_char (GHashTable *table,
 	if (achar->flags & ARC_CHAR_FLAG_WRITABLE)
 		achar->gatt_props |= ATT_CHAR_PROPER_WRITE;
 
-	g_hash_table_insert (table, g_strdup (uuidstr), achar);
+	g_hash_table_insert (table, achar->uuidstr, achar);
 
 	return achar;
 }

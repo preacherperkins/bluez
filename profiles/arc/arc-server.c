@@ -122,7 +122,7 @@ arc_server_new (struct btd_adapter *adapter)
 	unsigned	 u;
 
 	self		 = g_new0 (ARCServer, 1);
-	self->adapter	 = adapter;
+	self->adapter	 = btd_adapter_ref (adapter);
 	self->char_table = arc_char_table_new ();
 
 	/*
@@ -162,7 +162,12 @@ arc_server_destroy (ARCServer *self)
 	if (self->char_table)
 		g_hash_table_destroy (self->char_table);
 
-	mgmt_unref (self->mgmt);
+	if (self->mgmt)
+		mgmt_unref (self->mgmt);
+
+	if (self->adapter)
+		btd_adapter_unref (self->adapter);
+
 	g_free (self);
 }
 
@@ -1079,7 +1084,7 @@ arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter)
 {
 	ARCServer *self;
 
-	self	  = arc_server_new (adapter);
+	self = arc_server_new (adapter);
 
 	register_service (self);
 
@@ -1101,7 +1106,7 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 {
 	GSList		*cur;
 	ARCServer	*self;
-	GHashTableIter	 iter;
+	/* GHashTableIter	 iter; */
 	ARCChar		*achar;
 	const char	*uuidstr;
 
@@ -1115,14 +1120,14 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 
 	/* make sure to delete the attribute, otherwise
 	 * bluez will try to remove them after we're gone already */
-	g_hash_table_iter_init (&iter, self->char_table);
-	while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr,
-				       (gpointer)&achar)) {
-		attrib_db_update (self->adapter,
-				  achar->val_handle, NULL,
-				  NULL, 0, NULL);
-		attrib_db_del (self->adapter, achar->val_handle);
-	}
+	/* g_hash_table_iter_init (&iter, self->char_table); */
+	/* while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr, */
+	/* 			       (gpointer)&achar)) { */
+	/* 	attrib_db_update (self->adapter, */
+	/* 			  achar->val_handle, NULL, */
+	/* 			  NULL, 0, NULL); */
+	/* 	attrib_db_del (self->adapter, achar->val_handle); */
+	/* } */
 	arc_server_destroy (self);
 }
 
