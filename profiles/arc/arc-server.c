@@ -59,7 +59,7 @@
 
 #include "arc.h"
 
-#define CLIENT_TIMEOUT 10 /*seconds*/
+#define CLIENT_TIMEOUT 60 /*seconds*/
 
 static GSList *ARC_SERVERS = NULL;
 
@@ -385,6 +385,26 @@ arc_attrib_db_update (ARCServer *self, ARCChar *achar)
 }
 
 
+static gboolean
+arc_attrib_db_clear (ARCServer *self, ARCChar *achar)
+{
+	int ret;
+
+	ret = attrib_db_update (self->adapter,
+				achar->val_handle,
+				NULL, NULL, 0, NULL);
+	if (ret != 0) {
+		error ("failed to write attribute: %s",
+		       strerror (-ret));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+
+
 static void
 handle_blob (ARCServer *self, struct attribute *attr,
 	     struct btd_device *device, ARCChar *achar)
@@ -413,7 +433,7 @@ handle_blob (ARCServer *self, struct attribute *attr,
 		/* when processing the current method, clear any
 		 * existing result */
 		DBG ("clearing old results");
-		if (!arc_attrib_db_update (self, achar)) {
+		if (!arc_attrib_db_clear (self, achar)) {
 			error ("failed to update attrib");
 			return;
 		}
