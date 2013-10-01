@@ -783,7 +783,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 					DBUS_TYPE_OBJECT_PATH, &target_path,
 					DBUS_TYPE_STRING, &results,
 					DBUS_TYPE_INVALID);
-	if (!rv)
+	if (!rv || !results)
 		return btd_error_invalid_args (msg);
 
 	device = find_device_for_object_path (self, target_path);
@@ -795,7 +795,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
-	DBG ("%s: updating with %s", results);
+	DBG ("%s: updating with %s", __FUNCTION__, results);
 	if (!arc_attrib_db_update (self, result_achar)) {
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
