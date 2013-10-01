@@ -437,11 +437,11 @@ handle_blob (ARCServer *self, struct attribute *attr,
 
 		/* when processing the current method, clear any
 		 * existing result */
-		DBG ("clearing old results");
-		if (!arc_attrib_db_clear (self, achar)) {
-			error ("failed to update attrib");
-			return;
-		}
+		/* DBG ("clearing old results"); */
+		/* if (!arc_attrib_db_clear (self, achar)) { */
+		/* 	error ("failed to update attrib"); */
+		/* 	return; */
+		/* } */
 
 		request = arc_char_get_value_string (achar);
 		if (!request)
