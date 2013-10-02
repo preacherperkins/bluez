@@ -288,9 +288,7 @@ arc_log (const char *col, const char *frm, ...)
 	str = g_strdup_vprintf (frm, args);
 	va_end (args);
 
-	g_print ("%s%s\n" ANSI_DEFAULT,
-		 col, str);
-
+	g_print ("%s%s" ANSI_DEFAULT "\n", col, str);
 	g_free (str);
 }
 
