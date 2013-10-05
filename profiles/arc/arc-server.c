@@ -59,7 +59,7 @@
 
 #include "arc.h"
 
-#define CLIENT_TIMEOUT 60 /*seconds*/
+#define CLIENT_TIMEOUT 600 /*seconds*/
 
 static GSList *ARC_SERVERS = NULL;
 
@@ -99,9 +99,14 @@ do_disconnect (ARCServer *self)
 }
 
 static void
-on_connection_event (uint16_t index, uint16_t length,
-		 const void *param, ARCServer *self)
+on_connected (uint16_t index, uint16_t length,
+	const void *param, ARCServer *self)
 {
+	DBG ("%s", __FUNCTION__);
+	/* clear out any connection-specific data */
+	arc_char_table_clear_working_data (self->char_table);
+	return;
+
 	DBG ("connected/disconnected now, client has %d seconds "
 		"before auto-disconnect",
 		CLIENT_TIMEOUT);
@@ -111,6 +116,29 @@ on_connection_event (uint16_t index, uint16_t length,
 
 	/* clear out any connection-specific data */
 	arc_char_table_clear_working_data (self->char_table);
+}
+
+
+
+static void
+on_disconnected (uint16_t index, uint16_t length,
+		const void *param, ARCServer *self)
+{
+	DBG ("%s", __FUNCTION__);
+	enable_adv (self, TRUE);
+
+	/* clear out any connection-specific data */
+	arc_char_table_clear_working_data (self->char_table);
+
+	return;
+
+	DBG ("connected/disconnected now, client has %d seconds "
+		"before auto-disconnect",
+		CLIENT_TIMEOUT);
+
+	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
+			self);
+
 }
 
 
@@ -132,11 +160,11 @@ arc_server_new (struct btd_adapter *adapter)
 	self->mgmt = mgmt_new_default ();
 	mgmt_register(self->mgmt, MGMT_EV_DEVICE_DISCONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_connection_event, self, NULL);
+		      (mgmt_notify_func_t)on_disconnected, self, NULL);
 
 	mgmt_register(self->mgmt, MGMT_EV_DEVICE_CONNECTED,
 		      btd_adapter_get_index (adapter),
-		      (mgmt_notify_func_t)on_connection_event, self, NULL);
+		      (mgmt_notify_func_t)on_connected, self, NULL);
 
 	return self;
 }
@@ -255,8 +283,8 @@ hci_set_adv_params (int hcidev)
 	adv_params_cp.chan_map	   = 0x07; /* all channels */
 	adv_params_cp.advtype	   = 0x00; /* Connectable undirected
 					    * advertising */
-	DBG ("hci adv data");
-	dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp));
+	/* DBG ("hci adv data"); */
+	/* dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp)); */
 
 	memset(&rq, 0, sizeof(rq));
 	rq.ogf	  = OGF_LE_CTL;
@@ -784,8 +812,6 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	struct btd_device	*device;
 	ARCChar			*result_achar;
 
-	DBG ("%s", __FUNCTION__);
-
 	rv     = dbus_message_get_args (msg, NULL,
 					DBUS_TYPE_OBJECT_PATH, &target_path,
 					DBUS_TYPE_STRING, &results,
@@ -802,6 +828,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	if (!result_achar)
  		return btd_error_failed (msg, "could not find characteristic");
 
+	/* arc_attrib_db_clear (self, result_achar); */
 	arc_char_set_value_string (result_achar, results);
 
 	DBG ("%s: updating with [%s]", __FUNCTION__, results);
@@ -809,6 +836,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
 	}
+ 	enable_adv (self, TRUE);
 
 	if (!(reply = dbus_message_new_method_return (msg)))
 		return btd_error_failed (msg, "error creating DBus reply");
@@ -873,7 +901,6 @@ update_name_method (DBusConnection *conn, DBusMessage *msg,
 
 
 
-
 /**
  * Implementation of the EnableAdvertising DBus method.
  *
@@ -911,6 +938,8 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 		DBG ("arc: %sable advertising", enable ? "en" : "dis");
 		dbus_message_append_args(reply, DBUS_TYPE_INVALID);
 	}
+
+	/* btd_adapter_set_fast_connectable (self->adapter, enable); */
 
 	return reply;
 }
@@ -1212,6 +1241,7 @@ enable_discovery (ARCServer *aserver, gboolean enable)
 	hci_set_bit   (BDADDR_LE_RANDOM, &type);
 
 	cp.type = type;
+
 
 	if (enable)
 		res = mgmt_send (aserver->mgmt, MGMT_OP_START_DISCOVERY,
