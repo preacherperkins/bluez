@@ -69,6 +69,7 @@ typedef struct  {
 	guint			 adv_id, disc_id;
 	struct mgmt		*mgmt;
 	guint			 magic;
+	gboolean		 adv;
 } ARCServer;
 
 static gboolean do_enable_adv (ARCServer *self);
@@ -104,6 +105,7 @@ on_connected (uint16_t index, uint16_t length,
 {
 	DBG ("%s", __FUNCTION__);
 	/* clear out any connection-specific data */
+	enable_adv (self, TRUE);
 	arc_char_table_clear_working_data (self->char_table);
 	return;
 
@@ -127,6 +129,8 @@ on_disconnected (uint16_t index, uint16_t length,
 	DBG ("%s", __FUNCTION__);
 	enable_adv (self, TRUE);
 
+	/* set_mode (self, MGMT_SETTING_CONNECTABLE, 0x01, "connectable"); */
+
 	/* clear out any connection-specific data */
 	arc_char_table_clear_working_data (self->char_table);
 
@@ -140,8 +144,6 @@ on_disconnected (uint16_t index, uint16_t length,
 			self);
 
 }
-
-
 
 ARCServer*
 arc_server_new (struct btd_adapter *adapter)
@@ -574,7 +576,8 @@ attr_arc_server_read (struct attribute	*attr,
 	 * token (length is one less) */
 	if (!achar->writing) {
 		DBG ("%s: writing start blurb (%s)", __FUNCTION__, achar->name);
-		achar->data[0] = ARC_GATT_BLURB_PRE;	/* the token for begin-of-data */
+		achar->data[0] = ARC_GATT_BLURB_PRE;
+		/* the token for begin-of-data */
 		if (len > 0) { /* copy a chunk  and remove it */
 			memcpy (&achar->data[1],
 				achar->val_scratch->data, len - 1);
@@ -598,7 +601,7 @@ attr_arc_server_read (struct attribute	*attr,
 		arc_char_init_scratch (achar, FALSE/*don't copy*/);
 	}
 
-	attr->data = (uint8_t*)achar->data;
+	attr->data = (uint8_t*)g_memdup(achar->data, len);
 	attr->len  = len;
 
 	DBG ("reading handle 0x%04x", attr->handle);
@@ -1298,15 +1301,12 @@ enable_adv (ARCServer *self, gboolean enable)
 		}
 	}
 
-	/* /\* when enabling advertising, disable discovery  *\/ */
-	/* if (enable) */
-	/* 	enable_discovery (self, FALSE); */
-
 	if (!hci_set_adv_enable (hcidev, enable)) {
 		error ("failed to %sable advertising",
 		       enable ? "en" : "dis");
 		goto leave;
 	}
+
 
 	ret = hci_set_adv_data (
 		hcidev, self->magic,
@@ -1324,9 +1324,11 @@ leave:
 	if (hcisock >= 0)
 		close (hcisock);
 
-	/* when disabling advertising, enable discovery  */
-	/* if (!enable) */
-	/* 	enable_discovery (self, FALSE); */
+	if (rv)
+		self->adv = enable;
+
+
+
 
 	return rv;
 }

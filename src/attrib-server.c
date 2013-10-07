@@ -103,9 +103,6 @@ static bt_uuid_t ccc_uuid = {
 
 static void attrib_free(void *data)
 {
-	error ("LEAKING");
-	return; /* FIXME */
-
 	struct attribute *a = data;
 
 	g_free(a->data);
@@ -1533,12 +1530,9 @@ int attrib_db_update(struct btd_adapter *adapter, uint16_t handle,
 
 	a = dl->data;
 
-	/* FIXME */
-	/* a->data = g_try_realloc(a->data, len); */
-	/* if (len && a->data == NULL) */
-	/* 	return -ENOMEM;
-	 * 	*/
-	a->data = g_new (uint8_t, len);
+	a->data = g_try_realloc(a->data, len);
+	if (len && a->data == NULL)
+		return -ENOMEM;
 
 	a->len = len;
 	memcpy(a->data, value, len);
