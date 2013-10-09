@@ -59,7 +59,7 @@
 
 #include "arc.h"
 
-#define CLIENT_TIMEOUT 600 /*seconds*/
+#define CLIENT_TIMEOUT 100 /*seconds*/
 
 static GSList *ARC_SERVERS = NULL;
 
@@ -104,17 +104,9 @@ on_connected (uint16_t index, uint16_t length,
 	const void *param, ARCServer *self)
 {
 	DBG ("%s", __FUNCTION__);
-	/* clear out any connection-specific data */
-	enable_adv (self, TRUE);
-	arc_char_table_clear_working_data (self->char_table);
-	return;
-
-	DBG ("connected/disconnected now, client has %d seconds "
-		"before auto-disconnect",
-		CLIENT_TIMEOUT);
 
 	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
-			self);
+			       self);
 
 	/* clear out any connection-specific data */
 	arc_char_table_clear_working_data (self->char_table);
@@ -128,21 +120,6 @@ on_disconnected (uint16_t index, uint16_t length,
 {
 	DBG ("%s", __FUNCTION__);
 	enable_adv (self, TRUE);
-
-	/* set_mode (self, MGMT_SETTING_CONNECTABLE, 0x01, "connectable"); */
-
-	/* clear out any connection-specific data */
-	arc_char_table_clear_working_data (self->char_table);
-
-	return;
-
-	DBG ("connected/disconnected now, client has %d seconds "
-		"before auto-disconnect",
-		CLIENT_TIMEOUT);
-
-	g_timeout_add_seconds (CLIENT_TIMEOUT, (GSourceFunc)do_disconnect,
-			self);
-
 }
 
 ARCServer*
