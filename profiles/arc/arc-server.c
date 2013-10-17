@@ -906,7 +906,7 @@ name_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	if (adapter_set_name (aserver->adapter, name) != 0)
 		g_dbus_pending_property_error(
 			id, ERROR_INTERFACE ".InvalidArguments",
-			"Failed to update GATT");
+			"Failed to update adapter name");
 	else	/* generic stuff */
 		gatt_property_set (property, iter, id, aserver);
 }
@@ -1270,7 +1270,6 @@ enable_adv (ARCServer *self, gboolean enable)
 		       enable ? "en" : "dis");
 		goto leave;
 	}
-
 
 	ret = hci_set_adv_data (
 		hcidev, self->magic,
