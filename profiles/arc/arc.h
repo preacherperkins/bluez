@@ -153,18 +153,11 @@ ARCChar* arc_char_table_find_by_name (GHashTable *table,
 void arc_char_table_clear_working_data (GHashTable *table);
 
 
-
 #define ARC_GATT_BLURB_PRE  0xfe
 /**< prefix for an ARC blurb */
 
 #define ARC_GATT_BLURB_POST 0xff
 /**< suffix for an ARC blurb */
-
-
-#define ARC_PROP_RESULT  "Result"
-#define ARC_PROP_TARGET  "Target"
-#define ARC_PROP_EVENT   "Event"
-#define ARC_PROP_REQUEST "Request"
 
 /* ids for the various handles */
 typedef enum {

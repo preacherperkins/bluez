@@ -39,7 +39,8 @@ static struct {
 	{ ARC_RESULT_ID,  "Result" },
 	{ ARC_REQUEST_ID, "Request" },
 	{ ARC_TARGET_ID,  "Target" },
-	{ ARC_JID_ID,     "JID" }
+	{ ARC_JID_ID,     "JID" },
+	{ ARC_DEVNAME_ID, "DeviceName" },
 };
 
 

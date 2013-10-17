@@ -75,6 +75,13 @@ typedef struct  {
 static gboolean do_enable_adv (ARCServer *self);
 static gboolean enable_adv (ARCServer *self, gboolean enable);
 
+static void gatt_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
+			       GDBusPendingPropertySet id, ARCServer *aserver);
+static gboolean gatt_property_exists (const GDBusPropertyTable *property,
+				      ARCServer *aserver);
+static gboolean gatt_property_get (const GDBusPropertyTable *property,
+				   DBusMessageIter *iter, ARCServer *aserver);
+
 static void
 each_device_disconnect (struct btd_device *device, void *data)
 {
@@ -827,59 +834,6 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 }
 
 
-/**
- * This updates the name in GATT as well as the device name (which is
- * not settable of dbus)
- *
- * @param conn
- * @param msg
- * @param self
- *
- * @return
- */
-static DBusMessage*
-update_name_method (DBusConnection *conn, DBusMessage *msg,
-		    ARCServer *self)
-{
-	DBusMessage	*reply;
-	const char	*name;
-	gboolean	 rv;
-	int		 ret;
-	ARCChar		*name_char;
-
-	rv     = dbus_message_get_args (msg, NULL,
-					DBUS_TYPE_STRING, &name,
-					DBUS_TYPE_INVALID);
-	if (!rv)
-		return btd_error_invalid_args (msg);
-
-	DBG ("updating name to '%s'", name);
-
-	if (adapter_set_name (self->adapter, name) != 0)
-		return btd_error_failed (
-			msg, "updating adapter name failed");
-
-	name_char = arc_char_table_find_by_uuid (
-		self->char_table, ARC_DEVNAME_UUID);
-	if (!name_char)
-		return btd_error_failed (
-			msg, "cannot find name char");
-
-	arc_char_set_value_string (name_char, name);
-
-	ret = chunked_attrib_db_update (self, name_char);
-	if (ret != 0)
-		return btd_error_failed (msg, "gatt update failed (name)");
-
-	if (!(reply = dbus_message_new_method_return (msg)))
-		return btd_error_failed (msg, "error creating DBus reply");
-
-	dbus_message_append_args(reply, DBUS_TYPE_INVALID);
-
-	return reply;
-}
-
-
 
 /**
  * Implementation of the EnableAdvertising DBus method.
@@ -923,6 +877,40 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 
 	return reply;
 }
+
+
+
+/**
+ * This updates the name in GATT as well as the device name (which is
+ * not settable of dbus)
+ *
+ * @param conn
+ * @param msg
+ * @param self
+ *
+ * @return
+ */
+static void
+name_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
+		   GDBusPendingPropertySet id, ARCServer *aserver)
+{
+	DBusMessage	*reply;
+	const char	*name;
+	gboolean	 rv;
+	int		 ret;
+	ARCChar		*name_char;
+
+	dbus_message_iter_get_basic(iter, &name);
+	DBG ("updating name to '%s'", name);
+
+	if (adapter_set_name (aserver->adapter, name) != 0)
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Failed to update GATT");
+	else	/* generic stuff */
+		gatt_property_set (property, iter, id, aserver);
+}
+
 
 
 static void
@@ -1022,7 +1010,7 @@ gatt_property_exists (const GDBusPropertyTable *property, ARCServer *aserver)
 
 static gboolean
 gatt_property_get (const GDBusPropertyTable *property,
-	      DBusMessageIter *iter, ARCServer *aserver)
+		   DBusMessageIter *iter, ARCServer *aserver)
 {
 	ARCChar	*achar;
 	char	*str;
@@ -1050,12 +1038,16 @@ gatt_property_get (const GDBusPropertyTable *property,
 
 static const GDBusPropertyTable
 ARC_SERVER_PROPS[] = {
+	{ "DeviceName", "s",
+	  (GDBusPropertyGetter)gatt_property_get,
+	  (GDBusPropertySetter)name_property_set,
+	  NULL
+	},
 	{ "JID", "s",
 	  (GDBusPropertyGetter)gatt_property_get,
 	  (GDBusPropertySetter)gatt_property_set,
 	  NULL
 	},
-
 	{ "Magic", "y",
 	  (GDBusPropertyGetter)magic_property_get,
 	  (GDBusPropertySetter)magic_property_set,
@@ -1086,11 +1078,6 @@ ARC_SERVER_METHODS[] = {
 	  ("EmitEvent",
 	   GDBUS_ARGS({ "Event", "s" }), /* json blob (in) */
 	   NULL, (GDBusMethodFunction)emit_event_method) },
-
-	{ GDBUS_METHOD
-	  ("UpdateName",
-	   GDBUS_ARGS({ "Name", "s" }),
-	   NULL, (GDBusMethodFunction)update_name_method) },
 
 	{ GDBUS_METHOD
 	  ("EnableAdvertising",
@@ -1303,9 +1290,6 @@ leave:
 
 	if (rv)
 		self->adv = enable;
-
-
-
 
 	return rv;
 }
