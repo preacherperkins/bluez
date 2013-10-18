@@ -354,6 +354,12 @@ struct avdtp_state_callback {
 	void *user_data;
 };
 
+struct discover_callback {
+	unsigned int id;
+	avdtp_discover_cb_t cb;
+	void *user_data;
+};
+
 struct avdtp_stream {
 	GIOChannel *io;
 	uint16_t imtu;
@@ -412,9 +418,7 @@ struct avdtp {
 
 	char *buf;
 
-	avdtp_discover_cb_t discov_cb;
-	void *user_data;
-
+	struct discover_callback *discover;
 	struct pending_req *req;
 
 	guint dc_timer;
@@ -425,7 +429,7 @@ struct avdtp {
 
 static GSList *servers = NULL;
 
-static GSList *avdtp_callbacks = NULL;
+static GSList *state_callbacks = NULL;
 
 static int send_request(struct avdtp *session, gboolean priority,
 			struct avdtp_stream *stream, uint8_t signal_id,
@@ -439,11 +443,9 @@ static gboolean avdtp_parse_rej(struct avdtp *session,
 					uint8_t transaction, uint8_t signal_id,
 					void *buf, int size);
 static int process_queue(struct avdtp *session);
-static void connection_lost(struct avdtp *session, int err);
 static void avdtp_sep_set_state(struct avdtp *session,
 				struct avdtp_local_sep *sep,
 				avdtp_state_t state);
-static void auth_cb(DBusError *derr, void *user_data);
 
 static struct avdtp_server *find_server(GSList *list, struct btd_adapter *a)
 {
@@ -710,7 +712,7 @@ static void avdtp_set_state(struct avdtp *session,
 
 	session->state = new_state;
 
-	for (l = avdtp_callbacks; l != NULL; l = l->next) {
+	for (l = state_callbacks; l != NULL; l = l->next) {
 		struct avdtp_state_callback *cb = l->data;
 
 		if (session->device != cb->dev)
@@ -1043,19 +1045,21 @@ static void avdtp_sep_set_state(struct avdtp *session,
 
 static void finalize_discovery(struct avdtp *session, int err)
 {
+	struct discover_callback *discover = session->discover;
 	struct avdtp_error avdtp_err;
+
+	if (!discover)
+		return;
 
 	avdtp_error_init(&avdtp_err, AVDTP_ERRNO, err);
 
-	if (!session->discov_cb)
-		return;
+	if (discover->id > 0)
+		g_source_remove(discover->id);
 
-	session->discov_cb(session, session->seps,
-				err ? &avdtp_err : NULL,
-				session->user_data);
-
-	session->discov_cb = NULL;
-	session->user_data = NULL;
+	discover->cb(session, session->seps, err ? &avdtp_err : NULL,
+							discover->user_data);
+	g_free(discover);
+	session->discover = NULL;
 }
 
 static void release_stream(struct avdtp_stream *stream, struct avdtp *session)
@@ -1137,6 +1141,32 @@ static void avdtp_free(void *data)
 	g_free(session);
 }
 
+static void connection_lost(struct avdtp *session, int err)
+{
+	struct avdtp_server *server = session->server;
+	char address[18];
+
+	ba2str(device_get_address(session->device), address);
+	DBG("Disconnected from %s", address);
+
+	if (err != EACCES)
+		avdtp_cancel_authorization(session);
+
+	g_slist_foreach(session->streams, (GFunc) release_stream, session);
+	session->streams = NULL;
+
+	finalize_discovery(session, err);
+
+	avdtp_set_state(session, AVDTP_SESSION_STATE_DISCONNECTED);
+
+	if (session->ref > 0)
+		return;
+
+	server->sessions = g_slist_remove(server->sessions, session);
+	btd_device_unref(session->device);
+	avdtp_free(session);
+}
+
 static gboolean disconnect_timeout(gpointer user_data)
 {
 	struct avdtp *session = user_data;
@@ -1178,32 +1208,6 @@ static void set_disconnect_timer(struct avdtp *session)
 	session->dc_timer = g_timeout_add_seconds(DISCONNECT_TIMEOUT,
 						disconnect_timeout,
 						session);
-}
-
-static void connection_lost(struct avdtp *session, int err)
-{
-	struct avdtp_server *server = session->server;
-	char address[18];
-
-	ba2str(device_get_address(session->device), address);
-	DBG("Disconnected from %s", address);
-
-	if (err != EACCES)
-		avdtp_cancel_authorization(session);
-
-	g_slist_foreach(session->streams, (GFunc) release_stream, session);
-	session->streams = NULL;
-
-	finalize_discovery(session, err);
-
-	avdtp_set_state(session, AVDTP_SESSION_STATE_DISCONNECTED);
-
-	if (session->ref > 0)
-		return;
-
-	server->sessions = g_slist_remove(server->sessions, session);
-	btd_device_unref(session->device);
-	avdtp_free(session);
 }
 
 void avdtp_unref(struct avdtp *session)
@@ -3164,25 +3168,6 @@ static gboolean avdtp_parse_rej(struct avdtp *session,
 	}
 }
 
-gboolean avdtp_is_connected(struct btd_device *device)
-{
-	struct avdtp_server *server;
-	struct avdtp *session;
-
-	server = find_server(servers, device_get_adapter(device));
-	if (!server)
-		return FALSE;
-
-	session = find_session(server->sessions, device);
-	if (!session)
-		return FALSE;
-
-	if (session->state != AVDTP_SESSION_STATE_DISCONNECTED)
-		return TRUE;
-
-	return FALSE;
-}
-
 struct avdtp_service_capability *avdtp_stream_get_codec(
 						struct avdtp_stream *stream)
 {
@@ -3343,6 +3328,8 @@ static gboolean process_discover(gpointer data)
 {
 	struct avdtp *session = data;
 
+	session->discover->id = 0;
+
 	finalize_discovery(session, 0);
 
 	return FALSE;
@@ -3353,20 +3340,22 @@ int avdtp_discover(struct avdtp *session, avdtp_discover_cb_t cb,
 {
 	int err;
 
-	if (session->discov_cb)
+	if (session->discover)
 		return -EBUSY;
 
+	session->discover = g_new0(struct discover_callback, 1);
+
 	if (session->seps) {
-		session->discov_cb = cb;
-		session->user_data = user_data;
-		g_idle_add(process_discover, session);
+		session->discover->cb = cb;
+		session->discover->user_data = user_data;
+		session->discover->id = g_idle_add(process_discover, session);
 		return 0;
 	}
 
 	err = send_request(session, FALSE, NULL, AVDTP_DISCOVER, NULL, 0);
 	if (err == 0) {
-		session->discov_cb = cb;
-		session->user_data = user_data;
+		session->discover->cb = cb;
+		session->discover->user_data = user_data;
 	}
 
 	return err;
@@ -3807,7 +3796,7 @@ const char *avdtp_strerror(struct avdtp_error *err)
 	case AVDTP_BAD_ROHC_FORMAT:
 		return "Bad Header Compression Format";
 	case AVDTP_BAD_CP_FORMAT:
-		return "Bad Content Protetion Format";
+		return "Bad Content Protection Format";
 	case AVDTP_BAD_MULTIPLEXING_FORMAT:
 		return "Bad Multiplexing Format";
 	case AVDTP_UNSUPPORTED_CONFIGURATION:
@@ -3815,7 +3804,7 @@ const char *avdtp_strerror(struct avdtp_error *err)
 	case AVDTP_BAD_STATE:
 		return "Bad State";
 	default:
-		return "Unknow error";
+		return "Unknown error";
 	}
 }
 
@@ -3876,11 +3865,6 @@ gboolean avdtp_has_stream(struct avdtp *session, struct avdtp_stream *stream)
 	return g_slist_find(session->streams, stream) ? TRUE : FALSE;
 }
 
-gboolean avdtp_stream_setup_active(struct avdtp *session)
-{
-	return session->stream_setup;
-}
-
 void avdtp_set_device_disconnect(struct avdtp *session, gboolean dev_dc)
 {
 	session->device_disconnect = dev_dc;
@@ -3898,7 +3882,7 @@ unsigned int avdtp_add_state_cb(struct btd_device *dev,
 	state_cb->id = ++id;
 	state_cb->user_data = user_data;
 
-	avdtp_callbacks = g_slist_append(avdtp_callbacks, state_cb);
+	state_callbacks = g_slist_append(state_callbacks, state_cb);
 
 	return state_cb->id;
 }
@@ -3907,10 +3891,10 @@ gboolean avdtp_remove_state_cb(unsigned int id)
 {
 	GSList *l;
 
-	for (l = avdtp_callbacks; l != NULL; l = l->next) {
+	for (l = state_callbacks; l != NULL; l = l->next) {
 		struct avdtp_state_callback *cb = l->data;
 		if (cb && cb->id == id) {
-			avdtp_callbacks = g_slist_remove(avdtp_callbacks, cb);
+			state_callbacks = g_slist_remove(state_callbacks, cb);
 			g_free(cb);
 			return TRUE;
 		}

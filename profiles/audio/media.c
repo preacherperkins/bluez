@@ -95,7 +95,7 @@ struct media_player {
 	GHashTable		*track;		/* Player current track */
 	guint			watch;
 	guint			properties_watch;
-	guint			track_watch;
+	guint			seek_watch;
 	char			*status;
 	uint32_t		position;
 	uint32_t		duration;
@@ -948,7 +948,7 @@ static void media_player_free(gpointer data)
 
 	g_dbus_remove_watch(conn, mp->watch);
 	g_dbus_remove_watch(conn, mp->properties_watch);
-	g_dbus_remove_watch(conn, mp->track_watch);
+	g_dbus_remove_watch(conn, mp->seek_watch);
 
 	if (mp->track)
 		g_hash_table_unref(mp->track);
@@ -1304,13 +1304,21 @@ static gboolean set_status(struct media_player *mp, DBusMessageIter *iter)
 static gboolean set_position(struct media_player *mp, DBusMessageIter *iter)
 {
 	uint64_t value;
+	const char *status;
 
 	if (dbus_message_iter_get_arg_type(iter) != DBUS_TYPE_INT64)
 			return FALSE;
 
 	dbus_message_iter_get_basic(iter, &value);
 
-	mp->position = value / 1000;
+	value /= 1000;
+
+	if (value > get_position(mp))
+		status = "forward-seek";
+	else
+		status = "reverse-seek";
+
+	mp->position = value;
 	g_timer_start(mp->timer);
 
 	DBG("Position=%u", mp->position);
@@ -1325,9 +1333,14 @@ static gboolean set_position(struct media_player *mp, DBusMessageIter *iter)
 	 * If position is the maximum value allowed or greater than track's
 	 * duration, we send a track-reached-end event.
 	 */
-	if (mp->position == UINT32_MAX || mp->position >= mp->duration)
+	if (mp->position == UINT32_MAX || mp->position >= mp->duration) {
 		avrcp_player_event(mp->player, AVRCP_EVENT_TRACK_REACHED_END,
 									NULL);
+		return TRUE;
+	}
+
+	/* Send a status change to force resync the position */
+	avrcp_player_event(mp->player, AVRCP_EVENT_STATUS_CHANGED, status);
 
 	return TRUE;
 }
@@ -1681,6 +1694,21 @@ static gboolean properties_changed(DBusConnection *connection, DBusMessage *msg,
 	return TRUE;
 }
 
+static gboolean position_changed(DBusConnection *connection, DBusMessage *msg,
+							void *user_data)
+{
+	struct media_player *mp = user_data;
+	DBusMessageIter iter;
+
+	DBG("sender=%s path=%s", mp->sender, mp->path);
+
+	dbus_message_iter_init(msg, &iter);
+
+	set_position(mp, &iter);
+
+	return TRUE;
+}
+
 static struct media_player *media_player_create(struct media_adapter *adapter,
 						const char *sender,
 						const char *path,
@@ -1701,6 +1729,10 @@ static struct media_player *media_player_create(struct media_adapter *adapter,
 	mp->properties_watch = g_dbus_add_properties_watch(conn, sender,
 						path, MEDIA_PLAYER_INTERFACE,
 						properties_changed,
+						mp, NULL);
+	mp->seek_watch = g_dbus_add_signal_watch(conn, sender,
+						path, MEDIA_PLAYER_INTERFACE,
+						"Seeked", position_changed,
 						mp, NULL);
 	mp->player = avrcp_register_player(adapter->btd_adapter, &player_cb,
 							mp, media_player_free);

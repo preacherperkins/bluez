@@ -80,7 +80,7 @@ include_HEADERS += $(lib_headers)
 lib_LTLIBRARIES += lib/libbluetooth.la
 
 lib_libbluetooth_la_SOURCES = $(lib_headers) $(lib_sources)
-lib_libbluetooth_la_LDFLAGS = $(AM_LDFLAGS) -version-info 20:0:17
+lib_libbluetooth_la_LDFLAGS = $(AM_LDFLAGS) -version-info 20:1:17
 lib_libbluetooth_la_DEPENDENCIES = $(local_headers)
 endif
 
@@ -179,6 +179,7 @@ test_scripts =
 
 include Makefile.tools
 include Makefile.obexd
+include Makefile.android
 
 if HID2HCI
 rulesdir = @UDEV_DIR@/rules.d
@@ -293,7 +294,8 @@ pkgconfig_DATA = lib/bluez.pc
 endif
 
 DISTCHECK_CONFIGURE_FLAGS = --disable-datafiles --enable-library \
-					--disable-systemd --disable-udev
+					--disable-systemd --disable-udev \
+					--enable-android
 
 DISTCLEANFILES = $(pkgconfig_DATA)
 

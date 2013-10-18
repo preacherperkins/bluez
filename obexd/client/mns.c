@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include <gobex/gobex.h>
 #include <gobex/gobex-apparam.h>
@@ -43,6 +44,8 @@
 #include "mimetype.h"
 #include "map_ap.h"
 #include "map-event.h"
+
+#include "obexd/src/manager.h"
 
 struct mns_session {
 	GString *buffer;
@@ -182,19 +185,31 @@ static void parse_event_report_type(struct map_event *event, const char *value)
 static void parse_event_report_handle(struct map_event *event,
 							const char *value)
 {
-	event->handle = g_strdup(value);
+	event->handle = strtoull(value, NULL, 16);
 }
 
 static void parse_event_report_folder(struct map_event *event,
 							const char *value)
 {
-	event->folder = g_strdup(value);
+	if (!value)
+		return;
+
+	if (g_str_has_prefix(value, "/"))
+		event->folder = g_strdup(value);
+	else
+		event->folder = g_strconcat("/", value, NULL);
 }
 
 static void parse_event_report_old_folder(struct map_event *event,
 							const char *value)
 {
-	event->old_folder = g_strdup(value);
+	if (!value)
+		return;
+
+	if (g_str_has_prefix(value, "/"))
+		event->old_folder = g_strdup(value);
+	else
+		event->old_folder = g_strconcat("/", value, NULL);
 }
 
 static void parse_event_report_msg_type(struct map_event *event,
@@ -250,7 +265,6 @@ static const GMarkupParser event_report_parser = {
 
 static void map_event_free(struct map_event *event)
 {
-	g_free(event->handle);
 	g_free(event->folder);
 	g_free(event->old_folder);
 	g_free(event->msg_type);
@@ -325,11 +339,6 @@ static struct obex_mime_type_driver mime_event_report = {
 	.open = event_report_open,
 	.close = event_report_close,
 	.write = event_report_write,
-};
-
-static struct obex_mime_type_driver *mas_drivers[] = {
-	&mime_event_report,
-	NULL
 };
 
 static int mns_init(void)

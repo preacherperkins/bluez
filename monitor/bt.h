@@ -741,8 +741,17 @@ struct bt_hci_rsp_read_num_supported_iac {
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_READ_CURRENT_IAC_LAP		0x0c39
+struct bt_hci_rsp_read_current_iac_lap {
+	uint8_t  status;
+	uint8_t  num_iac;
+	uint8_t  iac_lap[0];
+} __attribute__ ((packed));
 
 #define BT_HCI_CMD_WRITE_CURRENT_IAC_LAP	0x0c3a
+struct bt_hci_cmd_write_current_iac_lap {
+	uint8_t  num_iac;
+	uint8_t  iac_lap[0];
+} __attribute__ ((packed));
 
 #define BT_HCI_CMD_READ_PAGE_SCAN_PERIOD_MODE	0x0c3b
 struct bt_hci_rsp_read_page_scan_period_mode {
@@ -871,6 +880,34 @@ struct bt_hci_cmd_enhanced_flush {
 #define BT_HCI_CMD_SET_EVENT_MASK_PAGE2		0x0c63
 struct bt_hci_cmd_set_event_mask_page2 {
 	uint8_t  mask[8];
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_LOCATION_DATA		0x0c64
+struct bt_hci_rsp_read_location_data {
+	uint8_t  status;
+	uint8_t  domain_aware;
+	uint8_t  domain[2];
+	uint8_t  domain_options;
+	uint8_t  options;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_LOCATION_DATA		0x0c65
+struct bt_hci_cmd_write_location_data {
+	uint8_t  domain_aware;
+	uint8_t  domain[2];
+	uint8_t  domain_options;
+	uint8_t  options;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_FLOW_CONTROL_MODE	0x0c66
+struct bt_hci_rsp_read_flow_control_mode {
+	uint8_t  status;
+	uint8_t  mode;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_FLOW_CONTROL_MODE	0x0c67
+struct bt_hci_cmd_write_flow_control_mode {
+	uint8_t  mode;
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_READ_LE_HOST_SUPPORTED	0x0c6c
@@ -1053,7 +1090,7 @@ struct bt_hci_rsp_read_local_amp_assoc {
 	uint8_t  status;
 	uint8_t  phy_handle;
 	uint16_t remain_assoc_len;
-	uint8_t  assoc_fragement[248];
+	uint8_t  assoc_fragment[248];
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_WRITE_REMOTE_AMP_ASSOC	0x140b
@@ -1061,7 +1098,7 @@ struct bt_hci_cmd_write_remote_amp_assoc {
 	uint8_t  phy_handle;
 	uint16_t len_so_far;
 	uint16_t remain_assoc_len;
-	uint8_t  assoc_fragement[248];
+	uint8_t  assoc_fragment[248];
 } __attribute__ ((packed));
 struct bt_hci_rsp_write_remote_amp_assoc {
 	uint8_t  status;
@@ -1643,7 +1680,7 @@ struct bt_hci_evt_phy_link_complete {
 	uint8_t  phy_handle;
 } __attribute__ ((packed));
 
-#define BT_HCI_EVT_CHANNEL_SELECTED		0x412
+#define BT_HCI_EVT_CHANNEL_SELECTED		0x41
 struct bt_hci_evt_channel_selected {
 	uint8_t  phy_handle;
 } __attribute__ ((packed));
@@ -1886,6 +1923,10 @@ struct bt_l2cap_pdu_conn_param_req {
 #define BT_L2CAP_PDU_CONN_PARAM_RSP	0x13
 struct bt_l2cap_pdu_conn_param_rsp {
 	uint16_t result;
+} __attribute__ ((packed));
+
+struct bt_l2cap_hdr_connless {
+	uint16_t psm;
 } __attribute__ ((packed));
 
 struct bt_l2cap_hdr_amp {

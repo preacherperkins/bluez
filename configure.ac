@@ -1,5 +1,5 @@
 AC_PREREQ(2.60)
-AC_INIT(bluez, 5.9)
+AC_INIT(bluez, 5.10)
 
 AM_INIT_AUTOMAKE([foreign subdir-objects color-tests silent-rules
 					tar-pax no-dist-gzip dist-xz])
@@ -240,5 +240,10 @@ fi
 AC_DEFINE_UNQUOTED(CONFIGDIR, "${configdir}",
 			[Directory for the configuration files])
 AC_SUBST(CONFIGDIR, "${configdir}")
+
+AC_ARG_ENABLE(android, AC_HELP_STRING([--enable-android],
+			[enable BlueZ for Android]),
+					[enable_android=${enableval}])
+AM_CONDITIONAL(ANDROID, test "${enable_android}" = "yes")
 
 AC_OUTPUT(Makefile src/bluetoothd.8 lib/bluez.pc)

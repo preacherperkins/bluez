@@ -77,6 +77,7 @@ static time_t time_offset = ((time_t) -1);
 static unsigned long filter_mask = 0;
 static bool index_filter = false;
 static uint16_t index_number = 0;
+static uint16_t index_current = 0;
 
 #define MAX_CONN 16
 
@@ -596,6 +597,42 @@ static const char *major_class_phone(uint8_t minor)
 static const struct {
 	uint8_t val;
 	const char *str;
+} major_class_av_table[] = {
+	{ 0x00, "Uncategorized, code for device not assigned"	},
+	{ 0x01, "earable Headset Device"			},
+	{ 0x02, "Hands-free Device"				},
+	{ 0x04, "Microphone"					},
+	{ 0x05, "Loudspeaker"					},
+	{ 0x06, "Headphones"					},
+	{ 0x07, "Portable Audio"				},
+	{ 0x08, "Car audio"					},
+	{ 0x09, "Set-top box"					},
+	{ 0x0a, "HiFi Audio Device"				},
+	{ 0x0b, "VCR"						},
+	{ 0x0c, "Video Camera"					},
+	{ 0x0d, "Camcorder"					},
+	{ 0x0e, "Video Monitor"					},
+	{ 0x0f, "Video Display and Loudspeaker"			},
+	{ 0x10, "Video Conferencing"				},
+	{ 0x12, "Gaming/Toy"					},
+	{ }
+};
+
+static const char *major_class_av(uint8_t minor)
+{
+	int i;
+
+	for (i = 0; major_class_av_table[i].str; i++) {
+		if (major_class_av_table[i].val == minor)
+			return major_class_av_table[i].str;
+	}
+
+	return NULL;
+}
+
+static const struct {
+	uint8_t val;
+	const char *str;
 } major_class_wearable_table[] = {
 	{ 0x01, "Wrist Watch"	},
 	{ 0x02, "Pager"		},
@@ -628,7 +665,8 @@ static const struct {
 	{ 0x02, "Phone (cellular, cordless, payphone, modem)",
 						major_class_phone	},
 	{ 0x03, "LAN /Network Access point"				},
-	{ 0x04, "Audio/Video (headset, speaker, stereo, video, vcr)"	},
+	{ 0x04, "Audio/Video (headset, speaker, stereo, video, vcr)",
+						major_class_av		},
 	{ 0x05, "Peripheral (mouse, joystick, keyboards)"		},
 	{ 0x06, "Imaging (printing, scanner, camera, display)"		},
 	{ 0x07, "Wearable",			major_class_wearable	},
@@ -1147,6 +1185,8 @@ static void print_hex_field(const char *label, const uint8_t *data,
 	char str[len * 2 + 1];
 	uint8_t i;
 
+	str[0] = '\0';
+
 	for (i = 0; i < len; i++)
 		sprintf(str + (i * 2), "%2.2x", data[i]);
 
@@ -1174,14 +1214,14 @@ static void print_pin_code(const uint8_t *pin_code, uint8_t pin_len)
 	print_field("PIN code: %s", str);
 }
 
-static void print_hash(const uint8_t *hash)
+static void print_hash(const char *label, const uint8_t *hash)
 {
-	print_key("Hash C", hash);
+	print_key("Hash C from %s", hash);
 }
 
-static void print_randomizer(const uint8_t *randomizer)
+static void print_randomizer(const char *label, const uint8_t *randomizer)
 {
-	print_key("Randomizer R", randomizer);
+	print_key("Randomizer R with %s", randomizer);
 }
 
 static void print_passkey(uint32_t passkey)
@@ -1262,6 +1302,60 @@ static void print_authentication(uint8_t authentication)
 	}
 
 	print_field("Authentication: %s (0x%2.2x)", str, authentication);
+}
+
+static void print_location_domain_aware(uint8_t aware)
+{
+	const char *str;
+
+	switch (aware) {
+	case 0x00:
+		str = "Regulatory domain unknown";
+		break;
+	case 0x01:
+		str = "Regulatory domain known";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Domain aware: %s (0x%2.2x)", str, aware);
+}
+
+static void print_location_domain(const uint8_t *domain)
+{
+	print_field("Domain: %c%c (0x%2.2x%2.2x)",
+		(char) domain[0], (char) domain[1], domain[0], domain[1]);
+}
+
+static void print_location_domain_options(uint8_t options)
+{
+	print_field("Domain options: %c (0x%2.2x)", (char) options, options);
+}
+
+static void print_location_options(uint8_t options)
+{
+	print_field("Options: 0x%2.2x", options);
+}
+
+static void print_flow_control_mode(uint8_t mode)
+{
+	const char *str;
+
+	switch (mode) {
+	case 0x00:
+		str = "Packet based";
+		break;
+	case 0x01:
+		str = "Data block based";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Flow control mode: %s (0x%2.2x)", str, mode);
 }
 
 static void print_flow_direction(uint8_t direction)
@@ -1495,19 +1589,72 @@ static void print_channel_map(const uint8_t *map)
 	print_field("Channel map: 0x%s", str);
 }
 
-void packet_print_version(const char *label, uint8_t version, uint16_t revision)
+void packet_print_version(const char *label, uint8_t version,
+				const char *sublabel, uint16_t subversion)
 {
-	print_field("%s: %d - 0x%4.4x", label, version, revision);
+	const char *str;
+
+	switch (version) {
+	case 0x00:
+		str = "Bluetooth 1.0b";
+		break;
+	case 0x01:
+		str = "Bluetooth 1.1";
+		break;
+	case 0x02:
+		str = "Bluetooth 1.2";
+		break;
+	case 0x03:
+		str = "Bluetooth 2.0";
+		break;
+	case 0x04:
+		str = "Bluetooth 2.1";
+		break;
+	case 0x05:
+		str = "Bluetooth 3.0";
+		break;
+	case 0x06:
+		str = "Bluetooth 4.0";
+		break;
+	case 0x07:
+		str = "Bluetooth 4.1";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("%s: %s (0x%2.2x) - %s %d (0x%4.4x)", label, str, version,
+					sublabel, subversion, subversion);
 }
 
-static void print_hci_version(uint8_t hci_ver, uint16_t hci_rev)
+static void print_hci_version(uint8_t version, uint16_t revision)
 {
-	packet_print_version("HCI version", hci_ver, btohs(hci_rev));
+	packet_print_version("HCI version", version,
+				"Revision", btohs(revision));
 }
 
-static void print_lmp_version(uint8_t lmp_ver, uint16_t lmp_subver)
+static void print_lmp_version(uint8_t version, uint16_t subversion)
 {
-	packet_print_version("LMP version", lmp_ver, btohs(lmp_subver));
+	packet_print_version("LMP version", version,
+				"Subversion", btohs(subversion));
+}
+
+static void print_pal_version(uint8_t version, uint16_t subversion)
+{
+	const char *str;
+
+	switch (version) {
+	case 0x01:
+		str = "Bluetooth 3.0";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("PAL version: %s (0x%2.2x) - Subversion %d (0x%4.4x)",
+			str, version, btohs(subversion), btohs(subversion));
 }
 
 void packet_print_company(const char *label, uint16_t company)
@@ -1879,12 +2026,12 @@ static const struct {
 } events_page2_table[] = {
 	{  0, "Physical Link Complete"					},
 	{  1, "Channel Selected"					},
-	{  2, "Disconnection Physical Link"				},
+	{  2, "Disconnection Physical Link Complete"			},
 	{  3, "Physical Link Loss Early Warning"			},
 	{  4, "Physical Link Recovery"					},
 	{  5, "Logical Link Complete"					},
 	{  6, "Disconnection Logical Link Complete"			},
-	{  7, "Flow Spec Modify Complete"				},
+	{  7, "Flow Specification Modify Complete"			},
 	{  8, "Number of Completed Data Blocks"				},
 	{  9, "AMP Start Test"						},
 	{ 10, "AMP Test End"						},
@@ -1993,19 +2140,86 @@ static void print_fec(uint8_t fec)
 #define BT_EIR_NAME_COMPLETE		0x09
 #define BT_EIR_TX_POWER			0x0a
 #define BT_EIR_CLASS_OF_DEV		0x0d
-#define BT_EIR_SSP_HASH			0x0e
-#define BT_EIR_SSP_RANDOMIZER		0x0f
+#define BT_EIR_SSP_HASH_P192		0x0e
+#define BT_EIR_SSP_RANDOMIZER_P192	0x0f
 #define BT_EIR_DEVICE_ID		0x10
 #define BT_EIR_SMP_TK			0x10
 #define BT_EIR_SMP_OOB_FLAGS		0x11
-#define BT_EIR_SLAVE_CONN_INT		0x12
+#define BT_EIR_SLAVE_CONN_INTERVAL	0x12
 #define BT_EIR_SERVICE_UUID16		0x14
 #define BT_EIR_SERVICE_UUID128		0x15
 #define BT_EIR_SERVICE_DATA		0x16
-#define BT_EIR_RANDOM_ADDRESS		0x17
-#define BT_EIR_PUBLIC_ADDRESS		0x18
+#define BT_EIR_PUBLIC_ADDRESS		0x17
+#define BT_EIR_RANDOM_ADDRESS		0x18
 #define BT_EIR_GAP_APPEARANCE		0x19
+#define BT_EIR_ADVERTISING_INTERVAL	0x1a
+#define BT_EIR_LE_DEVICE_ADDRESS	0x1b
+#define BT_EIR_LE_ROLE			0x1c
+#define BT_EIR_SSP_HASH_P256		0x1d
+#define BT_EIR_SSP_RANDOMIZER_P256	0x1e
+#define BT_EIR_3D_INFO_DATA		0x3d
 #define BT_EIR_MANUFACTURER_DATA	0xff
+
+static void print_manufacturer_apple(const void *data, uint8_t data_len)
+{
+	uint8_t type = *((uint8_t *) data);
+	uint8_t len;
+	const uint8_t *uuid;
+	uint16_t minor, major;
+	int8_t tx_power;
+	char identifier[100];
+
+	if (data_len < 1)
+		return;
+
+	switch (type) {
+	case 0x01:
+		snprintf(identifier, sizeof(identifier) - 1, "%s",
+						(const char *) (data + 1));
+		print_field("  Identifier: %s", identifier);
+		break;
+	case 0x02:
+		len = *((uint8_t *) (data + 1));
+		if (len != 0x15) {
+			print_hex_field("  Data", data, data_len);
+			break;
+		}
+
+		uuid = data + 2;
+		print_field("  iBeacon: %8.8x-%4.4x-%4.4x-%4.4x-%8.8x%4.4x",
+				bt_get_le32(&uuid[12]), bt_get_le16(&uuid[10]),
+				bt_get_le16(&uuid[8]), bt_get_le16(&uuid[6]),
+				bt_get_le32(&uuid[2]), bt_get_le16(&uuid[0]));
+
+		major = bt_get_le16(data + 18);
+		minor = bt_get_le16(data + 20);
+		print_field("  Version: %u.%u", major, minor);
+
+		tx_power = *(int8_t *) (data + 22);
+		print_field("  TX power: %d dB", tx_power);
+		break;
+	default:
+		print_hex_field("  Data", data, data_len);
+		break;
+	}
+}
+
+static void print_manufacturer_data(const void *data, uint8_t data_len)
+{
+	uint16_t company = bt_get_le16(data);
+
+	packet_print_company("Company", company);
+
+	switch (company) {
+	case 76:
+	case 19456:
+		print_manufacturer_apple(data + 2, data_len - 2);
+		break;
+	default:
+		print_hex_field("  Data", data + 2, data_len - 2);
+		break;
+	}
+}
 
 static void print_uuid16_list(const char *label, const void *data,
 							uint8_t data_len)
@@ -2065,9 +2279,20 @@ static const struct {
 	{ }
 };
 
+static const struct {
+	uint8_t bit;
+	const char *str;
+} eir_3d_table[] = {
+	{ 0, "Association Notification"					},
+	{ 1, "Battery Level Reporting"					},
+	{ 2, "Send Battery Level Report on Start-up Synchronization"	},
+	{ 7, "Factory Test Mode"					},
+	{ }
+};
+
 static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 {
-	uint8_t len = 0;
+	uint16_t len = 0;
 
 	if (eir_len == 0)
 		return;
@@ -2169,6 +2394,8 @@ static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 			break;
 
 		case BT_EIR_TX_POWER:
+			if (data_len < 1)
+				break;
 			print_field("TX power: %d dBm", (int8_t) *data);
 			break;
 
@@ -2178,12 +2405,16 @@ static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 			print_dev_class(data);
 			break;
 
-		case BT_EIR_SSP_HASH:
-			print_hex_field("SSP Hash", data, data_len);
+		case BT_EIR_SSP_HASH_P192:
+			if (data_len < 16)
+				break;
+			print_hash("P-192", data);
 			break;
 
-		case BT_EIR_SSP_RANDOMIZER:
-			print_hex_field("SSP Rand", data, data_len);
+		case BT_EIR_SSP_RANDOMIZER_P192:
+			if (data_len < 16)
+				break;
+			print_randomizer("P-192", data);
 			break;
 
 		case BT_EIR_DEVICE_ID:
@@ -2206,7 +2437,7 @@ static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 			print_field("SMP OOB Flags: 0x%2.2x", *data);
 			break;
 
-		case BT_EIR_SLAVE_CONN_INT:
+		case BT_EIR_SLAVE_CONN_INTERVAL:
 			if (data_len < 4)
 				break;
 			print_field("Slave Conn. Interval: 0x%4.4x - 0x%4.4x",
@@ -2239,13 +2470,13 @@ static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 		case BT_EIR_RANDOM_ADDRESS:
 			if (data_len < 6)
 				break;
-			print_addr("Address", data, 0x01);
+			print_addr("Random Address", data, 0x01);
 			break;
 
 		case BT_EIR_PUBLIC_ADDRESS:
 			if (data_len < 6)
 				break;
-			print_addr("Address", data, 0x00);
+			print_addr("Public Address", data, 0x00);
 			break;
 
 		case BT_EIR_GAP_APPEARANCE:
@@ -2254,11 +2485,47 @@ static void print_eir(const uint8_t *eir, uint8_t eir_len, bool le)
 			print_field("Appearance: 0x%4.4x", bt_get_le16(data));
 			break;
 
+		case BT_EIR_SSP_HASH_P256:
+			if (data_len < 16)
+				break;
+			print_hash("P-256", data);
+			break;
+
+		case BT_EIR_SSP_RANDOMIZER_P256:
+			if (data_len < 16)
+				break;
+			print_randomizer("P-256", data);
+			break;
+
+		case BT_EIR_3D_INFO_DATA:
+			print_hex_field("3D Information Data", data, data_len);
+			if (data_len < 2)
+				break;
+
+			flags = *data;
+			mask = flags;
+
+			print_field("  Features: 0x%2.2x", flags);
+
+			for (i = 0; eir_3d_table[i].str; i++) {
+				if (flags & (1 << eir_3d_table[i].bit)) {
+					print_field("    %s",
+							eir_3d_table[i].str);
+					mask &= ~(1 << eir_3d_table[i].bit);
+				}
+			}
+
+			if (mask)
+				print_text(COLOR_UNKNOWN_FEATURE_BIT,
+					"      Unknown features (0x%2.2x)", mask);
+
+			print_field("  Path Loss Threshold: %d", data[1]);
+			break;
+
 		case BT_EIR_MANUFACTURER_DATA:
 			if (data_len < 2)
 				break;
-			packet_print_company("Company", bt_get_le16(data));
-			print_hex_field("  Data", data + 2, data_len - 2);
+			print_manufacturer_data(data, data_len);
 			break;
 
 		default:
@@ -2346,6 +2613,7 @@ struct monitor_new_index {
 #define MAX_INDEX 16
 
 struct index_data {
+	uint8_t  type;
 	bdaddr_t bdaddr;
 };
 
@@ -2360,6 +2628,8 @@ void packet_monitor(struct timeval *tv, uint16_t index, uint16_t opcode,
 	if (index_filter && index_number != index)
 		return;
 
+	index_current = index;
+
 	if (tv && time_offset == ((time_t) -1))
 		time_offset = tv->tv_sec;
 
@@ -2368,6 +2638,7 @@ void packet_monitor(struct timeval *tv, uint16_t index, uint16_t opcode,
 		ni = data;
 
 		if (index < MAX_INDEX) {
+			index_list[index].type = ni->type;
 			bacpy(&index_list[index].bdaddr, &ni->bdaddr);
 		}
 
@@ -2742,8 +3013,8 @@ static void remote_oob_data_request_reply_cmd(const void *data, uint8_t size)
 	const struct bt_hci_cmd_remote_oob_data_request_reply *cmd = data;
 
 	print_bdaddr(cmd->bdaddr);
-	print_hash(cmd->hash);
-	print_randomizer(cmd->randomizer);
+	print_hash("P-192", cmd->hash);
+	print_randomizer("P-192", cmd->randomizer);
 }
 
 static void remote_oob_data_request_neg_reply_cmd(const void *data, uint8_t size)
@@ -3380,6 +3651,29 @@ static void read_num_supported_iac_rsp(const void *data, uint8_t size)
 	print_field("Number of IAC: %d", rsp->num_iac);
 }
 
+static void read_current_iac_lap_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_current_iac_lap *rsp = data;
+	uint8_t i;
+
+	print_status(rsp->status);
+	print_field("Number of IAC: %d", rsp->num_iac);
+
+	for (i = 0; i < rsp->num_iac; i++)
+		print_iac(rsp->iac_lap + (i * 3));
+}
+
+static void write_current_iac_lap_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_current_iac_lap *cmd = data;
+	uint8_t i;
+
+	print_field("Number of IAC: %d", cmd->num_iac);
+
+	for (i = 0; i < cmd->num_iac; i++)
+		print_iac(cmd->iac_lap + (i * 3));
+}
+
 static void read_page_scan_period_mode_rsp(const void *data, uint8_t size)
 {
 	const struct bt_hci_rsp_read_page_scan_period_mode *rsp = data;
@@ -3521,8 +3815,8 @@ static void read_local_oob_data_rsp(const void *data, uint8_t size)
 	const struct bt_hci_rsp_read_local_oob_data *rsp = data;
 
 	print_status(rsp->status);
-	print_hash(rsp->hash);
-	print_randomizer(rsp->randomizer);
+	print_hash("P-192", rsp->hash);
+	print_randomizer("P-192", rsp->randomizer);
 }
 
 static void read_inquiry_resp_tx_power_rsp(const void *data, uint8_t size)
@@ -3566,6 +3860,42 @@ static void set_event_mask_page2_cmd(const void *data, uint8_t size)
 	print_event_mask_page2(cmd->mask);
 }
 
+static void read_location_data_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_location_data *rsp = data;
+
+	print_status(rsp->status);
+	print_location_domain_aware(rsp->domain_aware);
+	print_location_domain(rsp->domain);
+	print_location_domain_options(rsp->domain_options);
+	print_location_options(rsp->options);
+}
+
+static void write_location_data_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_location_data *cmd = data;
+
+	print_location_domain_aware(cmd->domain_aware);
+	print_location_domain(cmd->domain);
+	print_location_domain_options(cmd->domain_options);
+	print_location_options(cmd->options);
+}
+
+static void read_flow_control_mode_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_flow_control_mode *rsp = data;
+
+	print_status(rsp->status);
+	print_flow_control_mode(rsp->mode);
+}
+
+static void write_flow_control_mode_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_flow_control_mode *cmd = data;
+
+	print_flow_control_mode(cmd->mode);
+}
+
 static void read_le_host_supported_rsp(const void *data, uint8_t size)
 {
 	const struct bt_hci_rsp_read_le_host_supported *rsp = data;
@@ -3600,7 +3930,16 @@ static void read_local_version_rsp(const void *data, uint8_t size)
 
 	print_status(rsp->status);
 	print_hci_version(rsp->hci_ver, rsp->hci_rev);
-	print_lmp_version(rsp->lmp_ver, rsp->lmp_subver);
+
+	switch (index_list[index_current].type) {
+	case HCI_BREDR:
+		print_lmp_version(rsp->lmp_ver, rsp->lmp_subver);
+		break;
+	case HCI_AMP:
+		print_pal_version(rsp->lmp_ver, rsp->lmp_subver);
+		break;
+	}
+
 	print_manufacturer(rsp->manufacturer);
 }
 
@@ -4606,8 +4945,12 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c38,  90, "Read Number of Supported IAC",
 				null_cmd, 0, true,
 				read_num_supported_iac_rsp, 2, true },
-	{ 0x0c39,  91, "Read Current IAC LAP" },
-	{ 0x0c3a,  92, "Write Current IAC LAP" },
+	{ 0x0c39,  91, "Read Current IAC LAP",
+				null_cmd, 0, true,
+				read_current_iac_lap_rsp, 2, false },
+	{ 0x0c3a,  92, "Write Current IAC LAP",
+				write_current_iac_lap_cmd, 1, false,
+				status_rsp, 1, true },
 	{ 0x0c3b,  93, "Read Page Scan Period Mode",
 				null_cmd, 0, true,
 				read_page_scan_period_mode_rsp, 2, true },
@@ -4680,10 +5023,18 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c63, 178, "Set Event Mask Page 2",
 				set_event_mask_page2_cmd, 8, true,
 				status_rsp, 1, true },
-	{ 0x0c64, 179, "Read Location Data" },
-	{ 0x0c65, 180, "Write Location Data" },
-	{ 0x0c66, 184, "Read Flow Control Mode" },
-	{ 0x0c67, 185, "Write Flow Control Mode" },
+	{ 0x0c64, 179, "Read Location Data",
+				null_cmd, 0, true,
+				read_location_data_rsp, 6, true },
+	{ 0x0c65, 180, "Write Location Data",
+				write_location_data_cmd, 5, true,
+				status_rsp, 1, true },
+	{ 0x0c66, 184, "Read Flow Control Mode",
+				null_cmd, 0, true,
+				read_flow_control_mode_rsp, 2, true },
+	{ 0x0c67, 185, "Write Flow Control Mode",
+				write_flow_control_mode_cmd, 1, true,
+				status_rsp, 1, true },
 	{ 0x0c68, 192, "Read Enhanced Transmit Power Level" },
 	{ 0x0c69, 194, "Read Best Effort Flush Timeout" },
 	{ 0x0c6a, 195, "Write Best Effort Flush Timeout" },
@@ -5872,7 +6223,7 @@ static const struct event_data event_table[] = {
 				logic_link_complete_evt, 5, true },
 	{ 0x46, "Disconnect Logical Link Complete",
 				disconn_logic_link_complete_evt, 4, true },
-	{ 0x47, "Flow Spec Modify Complete",
+	{ 0x47, "Flow Specification Modify Complete",
 				flow_spec_modify_complete_evt, 3, true },
 	{ 0x48, "Number of Completed Data Blocks",
 				num_completed_data_blocks_evt, 3, false },

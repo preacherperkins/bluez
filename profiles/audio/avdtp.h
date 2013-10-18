@@ -218,8 +218,6 @@ struct avdtp *avdtp_get(struct btd_device *device);
 void avdtp_unref(struct avdtp *session);
 struct avdtp *avdtp_ref(struct avdtp *session);
 
-gboolean avdtp_is_connected(struct btd_device *device);
-
 struct avdtp_service_capability *avdtp_service_cap_new(uint8_t category,
 							void *data, int size);
 
@@ -309,7 +307,6 @@ int avdtp_error_posix_errno(struct avdtp_error *err);
 struct btd_adapter *avdtp_get_adapter(struct avdtp *session);
 struct btd_device *avdtp_get_device(struct avdtp *session);
 
-gboolean avdtp_stream_setup_active(struct avdtp *session);
 void avdtp_set_device_disconnect(struct avdtp *session, gboolean dev_dc);
 
 int avdtp_init(struct btd_adapter *adapter);

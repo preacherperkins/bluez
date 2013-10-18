@@ -127,81 +127,6 @@ static inline DBusMessage *not_authorized(DBusMessage *msg)
 			"Not authorized");
 }
 
-static void dbus_message_iter_append_variant(DBusMessageIter *iter,
-						int type, void *val)
-{
-	DBusMessageIter value;
-	DBusMessageIter array;
-	const char *sig;
-
-	switch (type) {
-	case DBUS_TYPE_STRING:
-		sig = DBUS_TYPE_STRING_AS_STRING;
-		break;
-	case DBUS_TYPE_BYTE:
-		sig = DBUS_TYPE_BYTE_AS_STRING;
-		break;
-	case DBUS_TYPE_INT16:
-		sig = DBUS_TYPE_INT16_AS_STRING;
-		break;
-	case DBUS_TYPE_UINT16:
-		sig = DBUS_TYPE_UINT16_AS_STRING;
-		break;
-	case DBUS_TYPE_INT32:
-		sig = DBUS_TYPE_INT32_AS_STRING;
-		break;
-	case DBUS_TYPE_UINT32:
-		sig = DBUS_TYPE_UINT32_AS_STRING;
-		break;
-	case DBUS_TYPE_BOOLEAN:
-		sig = DBUS_TYPE_BOOLEAN_AS_STRING;
-		break;
-	case DBUS_TYPE_ARRAY:
-		sig = DBUS_TYPE_ARRAY_AS_STRING DBUS_TYPE_STRING_AS_STRING;
-		break;
-	case DBUS_TYPE_OBJECT_PATH:
-		sig = DBUS_TYPE_OBJECT_PATH_AS_STRING;
-		break;
-	default:
-		error("Could not append variant with type %d", type);
-		return;
-	}
-
-	dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT, sig, &value);
-
-	if (type == DBUS_TYPE_ARRAY) {
-		int i;
-		const char ***str_array = val;
-
-		dbus_message_iter_open_container(&value, DBUS_TYPE_ARRAY,
-			DBUS_TYPE_STRING_AS_STRING, &array);
-
-		for (i = 0; (*str_array)[i]; i++)
-			dbus_message_iter_append_basic(&array, DBUS_TYPE_STRING,
-							&((*str_array)[i]));
-
-		dbus_message_iter_close_container(&value, &array);
-	} else
-		dbus_message_iter_append_basic(&value, type, val);
-
-	dbus_message_iter_close_container(iter, &value);
-}
-
-static void dbus_message_iter_append_dict_entry(DBusMessageIter *dict,
-					const char *key, int type, void *val)
-{
-	DBusMessageIter entry;
-
-	dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY,
-					NULL, &entry);
-
-	dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
-
-	dbus_message_iter_append_variant(&entry, type, val);
-
-	dbus_message_iter_close_container(dict, &entry);
-}
-
 static void agent_disconnected(DBusConnection *conn, void *user_data)
 {
 	DBG("Agent exited");
@@ -325,7 +250,6 @@ static gboolean get_target(const GDBusPropertyTable *property,
 static gboolean get_root(const GDBusPropertyTable *property,
 					DBusMessageIter *iter, void *data)
 {
-	struct obex_session *os = data;
 	const char *root;
 
 	root = obex_option_root_folder();
@@ -363,6 +287,7 @@ static const char *status2str(uint8_t status)
 	case TRANSFER_STATUS_COMPLETE:
 		return "complete";
 	case TRANSFER_STATUS_ERROR:
+	default:
 		return "error";
 	}
 }
@@ -606,8 +531,6 @@ void manager_cleanup(void)
 
 void manager_emit_transfer_started(struct obex_transfer *transfer)
 {
-	static unsigned int id = 0;
-
 	transfer->status = TRANSFER_STATUS_ACTIVE;
 
 	g_dbus_emit_property_changed(connection, transfer->path,
@@ -755,8 +678,6 @@ int manager_request_authorization(struct obex_transfer *transfer, int32_t time,
 	struct obex_session *os = transfer->session;
 	DBusMessage *msg;
 	DBusPendingCall *call;
-	const char *filename = os->name ? os->name : "";
-	const char *type = os->type ? os->type : "";
 	unsigned int watch;
 	gboolean got_reply;
 

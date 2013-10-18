@@ -1010,7 +1010,7 @@ struct sig_opcode_data {
 	bool fixed;
 };
 
-static const struct sig_opcode_data sig_opcode_table[] = {
+static const struct sig_opcode_data bredr_sig_opcode_table[] = {
 	{ 0x01, "Command Reject",
 			sig_cmd_reject, 2, false },
 	{ 0x02, "Connection Request",
@@ -1045,6 +1045,12 @@ static const struct sig_opcode_data sig_opcode_table[] = {
 			sig_move_chan_cfm, 4, true },
 	{ 0x11, "Move Channel Confirmation Response",
 			sig_move_chan_cfm_rsp, 2, true },
+	{ },
+};
+
+static const struct sig_opcode_data le_sig_opcode_table[] = {
+	{ 0x01, "Command Reject",
+			sig_cmd_reject, 2, false },
 	{ 0x12, "Connection Parameter Update Request",
 			sig_conn_param_req, 8, true },
 	{ 0x13, "Connection Parameter Update Response",
@@ -1052,16 +1058,16 @@ static const struct sig_opcode_data sig_opcode_table[] = {
 	{ },
 };
 
-static void sig_packet(uint16_t index, bool in, uint16_t handle,
-			uint16_t cid, const void *data, uint16_t size)
+static void bredr_sig_packet(uint16_t index, bool in, uint16_t handle,
+				uint16_t cid, const void *data, uint16_t size)
 {
 	struct l2cap_frame frame;
 
 	while (size > 0) {
-		uint16_t len;
 		const struct bt_l2cap_hdr_sig *hdr = data;
 		const struct sig_opcode_data *opcode_data = NULL;
 		const char *opcode_color, *opcode_str;
+		uint16_t len;
 		int i;
 
 		if (size < 4) {
@@ -1081,9 +1087,9 @@ static void sig_packet(uint16_t index, bool in, uint16_t handle,
 			return;
 		}
 
-		for (i = 0; sig_opcode_table[i].str; i++) {
-			if (sig_opcode_table[i].opcode == hdr->code) {
-				opcode_data = &sig_opcode_table[i];
+		for (i = 0; bredr_sig_opcode_table[i].str; i++) {
+			if (bredr_sig_opcode_table[i].opcode == hdr->code) {
+				opcode_data = &bredr_sig_opcode_table[i];
 				break;
 			}
 		}
@@ -1140,6 +1146,111 @@ static void sig_packet(uint16_t index, bool in, uint16_t handle,
 	}
 
 	packet_hexdump(data, size);
+}
+
+static void le_sig_packet(uint16_t index, bool in, uint16_t handle,
+				uint16_t cid, const void *data, uint16_t size)
+{
+	struct l2cap_frame frame;
+	const struct bt_l2cap_hdr_sig *hdr = data;
+	const struct sig_opcode_data *opcode_data = NULL;
+	const char *opcode_color, *opcode_str;
+	uint16_t len;
+	int i;
+
+	if (size < 4) {
+		print_text(COLOR_ERROR, "malformed signal packet");
+		packet_hexdump(data, size);
+		return;
+	}
+
+	len = btohs(hdr->len);
+
+	data += 4;
+	size -= 4;
+
+	if (size != len) {
+		print_text(COLOR_ERROR, "invalid signal packet size");
+		packet_hexdump(data, size);
+		return;
+	}
+
+	for (i = 0; le_sig_opcode_table[i].str; i++) {
+		if (le_sig_opcode_table[i].opcode == hdr->code) {
+			opcode_data = &le_sig_opcode_table[i];
+			break;
+		}
+	}
+
+	if (opcode_data) {
+		if (opcode_data->func) {
+			if (in)
+				opcode_color = COLOR_MAGENTA;
+			else
+				opcode_color = COLOR_BLUE;
+		} else
+			opcode_color = COLOR_WHITE_BG;
+		opcode_str = opcode_data->str;
+	} else {
+		opcode_color = COLOR_WHITE_BG;
+		opcode_str = "Unknown";
+	}
+
+	print_indent(6, opcode_color, "LE L2CAP: ", opcode_str, COLOR_OFF,
+					" (0x%2.2x) ident %d len %d",
+					hdr->code, hdr->ident, len);
+
+	if (!opcode_data || !opcode_data->func) {
+		packet_hexdump(data, len);
+		return;
+	}
+
+	if (opcode_data->fixed) {
+		if (len != opcode_data->size) {
+			print_text(COLOR_ERROR, "invalid size");
+			packet_hexdump(data, len);
+			return;
+		}
+	} else {
+		if (len < opcode_data->size) {
+			print_text(COLOR_ERROR, "too short packet");
+			packet_hexdump(data, size);
+			return;
+		}
+	}
+
+	l2cap_frame_init(&frame, index, in, handle, cid, data, len);
+	opcode_data->func(&frame);
+}
+
+static void connless_packet(uint16_t index, bool in, uint16_t handle,
+				uint16_t cid, const void *data, uint16_t size)
+{
+	struct l2cap_frame frame;
+	const struct bt_l2cap_hdr_connless *hdr = data;
+	uint16_t psm;
+
+	if (size < 2) {
+		print_text(COLOR_ERROR, "malformed connectionless packet");
+		packet_hexdump(data, size);
+		return;
+	}
+
+	psm = btohs(hdr->psm);
+
+	data += 2;
+	size -= 2;
+
+	print_indent(6, COLOR_CYAN, "L2CAP: Connectionless", "", COLOR_OFF,
+						" len %d [PSM %d]", size, psm);
+
+	switch (psm) {
+	default:
+		packet_hexdump(data, size);
+		break;
+	}
+
+	l2cap_frame_init(&frame, index, in, handle, cid, data, size);
 }
 
 static void print_controller_list(const uint8_t *data, uint16_t size)
@@ -1515,6 +1626,8 @@ static void print_hex_field(const char *label, const uint8_t *data,
 	char str[len * 2 + 1];
 	uint8_t i;
 
+	str[0] = '\0';
+
 	for (i = 0; i < len; i++)
 		sprintf(str + (i * 2), "%2.2x", data[i]);
 
@@ -1567,8 +1680,8 @@ static void print_data_list(const char *label, uint8_t length,
 	print_field("%s: %u entr%s", label, count, count == 1 ? "y" : "ies");
 
 	while (size >= length) {
-		print_handle_range("  Handle", data);
-		print_uuid("        ", data + 4, length - 4);
+		print_field("Handle: 0x%4.4x", bt_get_le16(data));
+		print_hex_field("Value", data + 2, length - 2);
 
 		data += length;
 		size -= length;
@@ -1815,6 +1928,17 @@ static void att_read_blob_rsp(const struct l2cap_frame *frame)
 	packet_hexdump(frame->data, frame->size);
 }
 
+static void att_read_multiple_req(const struct l2cap_frame *frame)
+{
+	int i, count;
+
+	count = frame->size / 2;
+
+	for (i = 0; i < count; i++)
+		print_field("Handle: 0x%4.4x",
+					bt_get_le16(frame->data + (i * 2)));
+}
+
 static void att_read_group_type_req(const struct l2cap_frame *frame)
 {
 	print_handle_range("Handle range", frame->data);
@@ -1838,6 +1962,40 @@ static void att_write_req(const struct l2cap_frame *frame)
 
 static void att_write_rsp(const struct l2cap_frame *frame)
 {
+}
+
+static void att_prepare_write_req(const struct l2cap_frame *frame)
+{
+	print_field("Handle: 0x%4.4x", bt_get_le16(frame->data));
+	print_field("Offset: 0x%4.4x", bt_get_le16(frame->data + 2));
+	print_hex_field("  Data", frame->data + 4, frame->size - 4);
+}
+
+static void att_prepare_write_rsp(const struct l2cap_frame *frame)
+{
+	print_field("Handle: 0x%4.4x", bt_get_le16(frame->data));
+	print_field("Offset: 0x%4.4x", bt_get_le16(frame->data + 2));
+	print_hex_field("  Data", frame->data + 4, frame->size - 4);
+}
+
+static void att_execute_write_req(const struct l2cap_frame *frame)
+{
+	uint8_t flags = *(uint8_t *) frame->data;
+	const char *flags_str;
+
+	switch (flags) {
+	case 0x00:
+		flags_str = "Cancel all prepared writes";
+		break;
+	case 0x01:
+		flags_str = "Immediately write all pending values";
+		break;
+	default:
+		flags_str = "Unknown";
+		break;
+	}
+
+	print_field("Flags: %s (0x%02x)", flags_str, flags);
 }
 
 static void att_handle_value_notify(const struct l2cap_frame *frame)
@@ -1901,7 +2059,8 @@ static const struct att_opcode_data att_opcode_table[] = {
 			att_read_blob_req, 4, true },
 	{ 0x0d, "Read Blob Response",
 			att_read_blob_rsp, 0, false },
-	{ 0x0e, "Read Multiple Request"		},
+	{ 0x0e, "Read Multiple Request",
+			att_read_multiple_req, 4, false },
 	{ 0x0f, "Read Multiple Response"	},
 	{ 0x10, "Read By Group Type Request",
 			att_read_group_type_req, 6, false },
@@ -1911,9 +2070,12 @@ static const struct att_opcode_data att_opcode_table[] = {
 			att_write_req, 2, false	},
 	{ 0x13, "Write Response",
 			att_write_rsp, 0, true	},
-	{ 0x16, "Prepare Write Request"		},
-	{ 0x17, "Prepare Write Response"	},
-	{ 0x18, "Execute Write Request"		},
+	{ 0x16, "Prepare Write Request",
+			att_prepare_write_req, 4, false },
+	{ 0x17, "Prepare Write Response",
+			att_prepare_write_rsp, 4, false },
+	{ 0x18, "Execute Write Request",
+			att_execute_write_req, 1, true },
 	{ 0x19, "Execute Write Response"	},
 	{ 0x1b, "Handle Value Notification",
 			att_handle_value_notify, 2, false },
@@ -2358,14 +2520,19 @@ static void l2cap_frame(uint16_t index, bool in, uint16_t handle,
 
 	switch (cid) {
 	case 0x0001:
-	case 0x0005:
-		sig_packet(index, in, handle, cid, data, size);
+		bredr_sig_packet(index, in, handle, cid, data, size);
+		break;
+	case 0x0002:
+		connless_packet(index, in, handle, cid, data, size);
 		break;
 	case 0x0003:
 		amp_packet(index, in, handle, cid, data, size);
 		break;
 	case 0x0004:
 		att_packet(index, in, handle, cid, data, size);
+		break;
+	case 0x0005:
+		le_sig_packet(index, in, handle, cid, data, size);
 		break;
 	case 0x0006:
 		smp_packet(index, in, handle, cid, data, size);
@@ -2383,6 +2550,9 @@ static void l2cap_frame(uint16_t index, bool in, uint16_t handle,
 		switch (psm) {
 		case 0x0001:
 			sdp_packet(&frame, chan);
+			break;
+		case 0x001f:
+			att_packet(index, in, handle, cid, data, size);
 			break;
 		default:
 			packet_hexdump(data, size);

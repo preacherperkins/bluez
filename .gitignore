@@ -53,8 +53,10 @@ tools/hid2hci
 tools/rfcomm
 tools/l2ping
 tools/l2test
+tools/cltest
 tools/rctest
 tools/scotest
+tools/amptest
 tools/sdptool
 tools/avtest
 tools/bdaddr
@@ -64,6 +66,7 @@ tools/bluetooth-player
 tools/l2cap-tester
 tools/sco-tester
 tools/btinfo
+tools/obexctl
 test/sap_client.pyc
 test/bluezutils.pyc
 unit/test-eir
@@ -100,6 +103,4 @@ unit/test-gobex-transfer
 unit/test-*.log
 unit/test-*.trs
 
-/GPATH
-/GRTAGS
-/GTAGS
+android/bluetoothd

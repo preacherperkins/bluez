@@ -125,7 +125,7 @@ static struct tupla ServiceClass[] = {
 	{ AV_REMOTE_TARGET_SVCLASS_ID,		"AV Remote Target"		},
 	{ ADVANCED_AUDIO_SVCLASS_ID,		"Advanced Audio"		},
 	{ AV_REMOTE_SVCLASS_ID,			"AV Remote"			},
-	{ VIDEO_CONF_SVCLASS_ID,		"Video Conferencing"		},
+	{ AV_REMOTE_CONTROLLER_SVCLASS_ID,	"AV Remote Controller"		},
 	{ INTERCOM_SVCLASS_ID,			"Intercom"			},
 	{ FAX_SVCLASS_ID,			"Fax"				},
 	{ HEADSET_AGW_SVCLASS_ID,		"Headset Audio Gateway"		},
@@ -2546,6 +2546,7 @@ int sdp_set_profile_descs(sdp_record_t *rec, const sdp_list_t *profiles)
 	int i = 0, seqlen = sdp_list_len(profiles);
 	void **seqDTDs, **seqs;
 	const sdp_list_t *p;
+	sdp_data_t *pAPSeq;
 
 	seqDTDs = malloc(seqlen * sizeof(void *));
 	if (!seqDTDs)
@@ -2563,7 +2564,7 @@ int sdp_set_profile_descs(sdp_record_t *rec, const sdp_list_t *profiles)
 		sdp_profile_desc_t *profile = p->data;
 		if (!profile) {
 			status = -1;
-			break;
+			goto end;
 		}
 		switch (profile->uuid.type) {
 		case SDP_UUID16:
@@ -2580,7 +2581,7 @@ int sdp_set_profile_descs(sdp_record_t *rec, const sdp_list_t *profiles)
 			break;
 		default:
 			status = -1;
-			break;
+			goto end;
 		}
 		dtds[1] = &uint16;
 		values[1] = &profile->version;
@@ -2588,7 +2589,7 @@ int sdp_set_profile_descs(sdp_record_t *rec, const sdp_list_t *profiles)
 
 		if (seq == NULL) {
 			status = -1;
-			break;
+			goto end;
 		}
 
 		seqDTDs[i] = &seq->dtd;
@@ -2596,10 +2597,10 @@ int sdp_set_profile_descs(sdp_record_t *rec, const sdp_list_t *profiles)
 		sdp_pattern_add_uuid(rec, &profile->uuid);
 		i++;
 	}
-	if (status == 0) {
-		sdp_data_t *pAPSeq = sdp_seq_alloc(seqDTDs, seqs, seqlen);
-		sdp_attr_add(rec, SDP_ATTR_PFILE_DESC_LIST, pAPSeq);
-	}
+
+	pAPSeq = sdp_seq_alloc(seqDTDs, seqs, seqlen);
+	sdp_attr_add(rec, SDP_ATTR_PFILE_DESC_LIST, pAPSeq);
+end:
 	free(seqDTDs);
 	free(seqs);
 	return status;
