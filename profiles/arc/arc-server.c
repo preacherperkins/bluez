@@ -72,8 +72,7 @@ typedef struct  {
 	gboolean		 adv;
 } ARCServer;
 
-static gboolean do_enable_adv (ARCServer *self);
-static gboolean enable_adv (ARCServer *self, gboolean enable);
+static gboolean arc_server_advertise (ARCServer *self, gboolean enable);
 
 static void gatt_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 			       GDBusPendingPropertySet id, ARCServer *aserver);
@@ -126,7 +125,7 @@ on_disconnected (uint16_t index, uint16_t length,
 		const void *param, ARCServer *self)
 {
 	DBG ("%s", __FUNCTION__);
-	enable_adv (self, TRUE);
+	arc_server_advertise (self, TRUE);
 }
 
 ARCServer*
@@ -185,16 +184,11 @@ arc_server_destroy (ARCServer *self)
 	g_free (self);
 }
 
-
 static gboolean
-do_enable_adv (ARCServer *self)
+arc_server_advertise (ARCServer *self, gboolean enable)
 {
-	if (!enable_adv (self, TRUE))
-		error ("failed to restart advertising");
-	else
-		DBG ("restarted advertising");
-
-	return FALSE;
+	return arc_enable_advertising (self->adapter,
+				       self->magic, enable);
 }
 
 
@@ -240,148 +234,6 @@ find_arc_server_from_device (struct btd_device *device)
 
 	return self;
 }
-
-
-G_GNUC_UNUSED static void
-dump_bytes (uint8_t *bytes, size_t len)
-{
-	unsigned u;
-
-	for (u = 0; u !=len; ++u)
-		g_print ("%02X ", bytes[u]);
-	g_print ("(%d)\n", (int)len);
-}
-
-
-static int
-hci_set_adv_params (int hcidev)
-{
-	struct hci_request			rq;
-	le_set_advertising_parameters_cp	adv_params_cp;
-	uint8_t					status;
-	int					ret;
-
-	/* p.1059 of the BT Core Spec 4.x */
-
-	memset(&adv_params_cp, 0, sizeof(adv_params_cp));
-	adv_params_cp.min_interval = htobs(0x0800);
-	adv_params_cp.max_interval = htobs(0x0800);
-	adv_params_cp.chan_map	   = 0x07; /* all channels */
-	adv_params_cp.advtype	   = 0x00; /* Connectable undirected
-					    * advertising */
-	/* DBG ("hci adv data"); */
-	/* dump_bytes ((uint8_t*)&adv_params_cp, sizeof(adv_params_cp)); */
-
-	memset(&rq, 0, sizeof(rq));
-	rq.ogf	  = OGF_LE_CTL;
-	rq.ocf	  = OCF_LE_SET_ADVERTISING_PARAMETERS;
-	rq.cparam = &adv_params_cp;
-	rq.clen	  = LE_SET_ADVERTISING_PARAMETERS_CP_SIZE;
-	rq.rparam = &status;
-	rq.rlen	  = 1;
-
-	return hci_send_req (hcidev, &rq, 1000);
-}
-
-
-
-/* this all makes sense after reading the BT spec, in particular
- * Appendix C */
-static int
-hci_set_adv_data (int hcidev, uint8_t data, const char *name)
-{
-	struct hci_request		rq;
-	le_set_advertising_data_cp	advdata_cp;
-	uint8_t				status;
-	int				ret;
-	bt_uuid_t			uuid;
-	unsigned			offset, partsize;
-
-	g_return_val_if_fail (hcidev, -1);
-
-	memset(&advdata_cp, 0, sizeof(advdata_cp));
-	offset = 0;
-
-	/* the UUID to advertise */
-	partsize = sizeof(uint128_t) + 1;
-	advdata_cp.data[offset + 0] = partsize;
-	advdata_cp.data[offset + 1] = 0x07; /* uuid */
-	bt_string_to_uuid (&uuid, ARC_SERVICE_UUID);
-	g_assert (uuid.type == BT_UUID128);
-	memcpy (&advdata_cp.data[offset + 2], &uuid.value.u128,
-		sizeof(uuid.value.u128));
-	offset += partsize + 1;
-
-	/* set our manufacturer-specific byte */
-	partsize = 4;
-	advdata_cp.data[offset + 0] = partsize;
-	advdata_cp.data[offset + 1] = 0xff; /* manufacturer-specific data; */
-	advdata_cp.data[offset + 2] = 0xf2;  /* Unknown */
-	advdata_cp.data[offset + 3] = 0x00;  /* Vendor */
-	advdata_cp.data[offset + 4] = data;
-	offset += partsize + 1;
-
-	/* the local name to advertise */
-	if (name && name[0] != '\0') {
-		unsigned strsize;
-		strsize = MIN(strlen(name),
-			      LE_SET_ADVERTISING_DATA_CP_SIZE - offset - 4);
-		partsize = strsize + 1;
-		advdata_cp.data[offset + 0] = partsize;
-		advdata_cp.data[offset + 1] = 0x08;	/* short local name */
-		memcpy (&advdata_cp.data[offset + 2], name, strsize);
-		offset += partsize + 1;
-
-		DBG ("advertising name '%s'", name);
-	}
-
-	advdata_cp.length  = offset + 1;
-
-	DBG ("hci adv data");
-	dump_bytes ((uint8_t*)&advdata_cp, sizeof(advdata_cp));
-
-	memset (&rq, 0, sizeof(rq));
-	rq.ogf	  = OGF_LE_CTL;
-	rq.ocf	  = OCF_LE_SET_ADVERTISING_DATA;
-	rq.cparam = &advdata_cp;
-	rq.clen	  = sizeof (advdata_cp);
-	rq.rparam = &status;
-	rq.rlen	  = 1;
-
-	return hci_send_req (hcidev, &rq, 1000);
-}
-
-
-
-static gboolean
-hci_set_adv_enable (int hcidev, gboolean enable)
-{
-	struct hci_request		rq;
-	le_set_advertise_enable_cp	advertise_cp;
-	uint8_t				status;
-	int				ret;
-
-	memset(&advertise_cp, 0, sizeof(advertise_cp));
-	advertise_cp.enable = enable ? 0x01 : 0x00;
-
-	memset(&rq, 0, sizeof(rq));
-	rq.ogf	  = OGF_LE_CTL;
-	rq.ocf	  = OCF_LE_SET_ADVERTISE_ENABLE;
-	rq.cparam = &advertise_cp;
-	rq.clen	  = LE_SET_ADVERTISE_ENABLE_CP_SIZE;
-	rq.rparam = &status;
-	rq.rlen	  = 1;
-
-	ret = hci_send_req (hcidev, &rq, 1000);
-	if (ret < 0) {
-		error ("failed to %sable advertising",
-		       enable ? "en" : "dis");
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
 
 
 static gboolean
@@ -823,7 +675,6 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 		return btd_error_failed
 			(msg, "gatt update failed (result)");
 	}
- 	enable_adv (self, TRUE);
 
 	if (!(reply = dbus_message_new_method_return (msg)))
 		return btd_error_failed (msg, "error creating DBus reply");
@@ -860,7 +711,7 @@ enable_advertising_method (DBusConnection *conn, DBusMessage *msg, ARCServer *se
 				    DBUS_TYPE_INVALID);
 
 	/* turning advertising on/off */
-	if (!enable_adv (self, enable)) {
+	if (!arc_server_advertise (self, enable)) {
 		char	*blurb;
 		blurb = g_strdup_printf ("%sabling advertising failed",
 					 enable ? "en" : "dis");
@@ -1126,169 +977,5 @@ arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter)
 				    adapter_get_path (adapter),
 				    ARC_SERVER_IFACE);
 
-	/* make sure to delete the attribute, otherwise
-	 * bluez will try to remove them after we're gone already */
-	/* g_hash_table_iter_init (&iter, self->char_table); */
-	/* while (g_hash_table_iter_next (&iter, (gpointer)&uuidstr, */
-	/* 			       (gpointer)&achar)) { */
-	/* 	attrib_db_update (self->adapter, */
-	/* 			  achar->val_handle, NULL, */
-	/* 			  NULL, 0, NULL); */
-	/* 	attrib_db_del (self->adapter, achar->val_handle); */
-	/* } */
 	arc_server_destroy (self);
-}
-
-
-/**
- * Get an HCI-device handle. Close with hci_close_dev
- *
- * @param serf an ARCServer
- * @param hcisock an HCI-socket
- *
- * @return the device handle, < 0 in case or error
- */
-static int
-get_hci_device (ARCServer *self, int hcisock)
-{
-	int			hcidev, fd;
-	struct hci_dev_info	devinfo;
-
-	devinfo.dev_id = btd_adapter_get_index (self->adapter);
-	if (devinfo.dev_id == MGMT_INDEX_NONE) {
-		error ("can't get adapter index");
-		return -1;
-	}
-
-	devinfo.flags = HCI_RAW;
-
-	if (ioctl (hcisock, HCIGETDEVINFO, (void*)&devinfo) != 0) {
-		error ("can't get hci socket");
-		return -1;
-	}
-
-	fd = hci_open_dev (devinfo.dev_id);
-	hci_read_bd_addr(fd, &devinfo.bdaddr, 1000);
-	hci_close_dev(fd);
-
-	hcidev = hci_open_dev (devinfo.dev_id);
-	if (hcidev < 0) {
-		error ("failed to open hci device");
-		return -1;
-	}
-
-	return hcidev;
-}
-
-
-
-static void
-disco_callback (uint8_t status, uint16_t len, const void *param,
-		void *user_data)
-{
-	if (status == 0) {
-		DBG ("disco started/stopped");
-		return;
-	}
-
-	g_debug ("Unable to start/stop discovery. status 0x%02x (%s)",
-		status, mgmt_errstr(status));
-}
-
-static void
-enable_discovery (ARCServer *aserver, gboolean enable)
-{
-	struct mgmt_cp_start_discovery	cp;
-	uint8_t				type;
-	int res;
-
-	type = 0;
-	hci_clear_bit (BDADDR_BREDR, &type);
-	hci_set_bit   (BDADDR_LE_PUBLIC, &type);
-	hci_set_bit   (BDADDR_LE_RANDOM, &type);
-
-	cp.type = type;
-
-
-	if (enable)
-		res = mgmt_send (aserver->mgmt, MGMT_OP_START_DISCOVERY,
-				btd_adapter_get_index (aserver->adapter),
-				sizeof(cp), &cp, disco_callback,
-				NULL, NULL);
-	else
-		res = mgmt_send (aserver->mgmt, MGMT_OP_STOP_DISCOVERY,
-				btd_adapter_get_index (aserver->adapter),
-				sizeof(cp), &cp, disco_callback,
-				NULL, NULL);
-
-	if (res != 0)
-		error ("%s disco failed",
-			enable ? "starting" : "stopping");
-}
-
-
-/**
- * Enable/Disable advertising using the HCI-interface
- *
- * @param self an ARC-server instance
- * @param enable if TRUE, enable advertising, otherwise disable it
- *
- * @return TRUE if enabling or disabling worked, FALSE otherwise
- */
-static gboolean
-enable_adv (ARCServer *self, gboolean enable)
-{
-	gboolean		rv;
-	struct hci_dev_info	devinfo;
-	struct hci_request	rq;
-	int			hcisock, hcidev, ret;
-	uint8_t byte[] = { 0x0 };
-
-	rv     = FALSE;
-	hcidev = hcisock = -1;
-
-	hcisock = socket (AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
-	if (hcisock < 0)  {
-		error ("cannot open hci-socket: %s", strerror (errno));
-		goto leave;
-	}
-
-	hcidev = get_hci_device (self, hcisock);
-	if (hcidev < 0)
-		goto leave;
-
-	if (enable /* ie, if we're currently disabled */) {
-		ret = hci_set_adv_params (hcidev);
-		if (ret != 0) {
-			error ("setting adv params failed (%d)", ret);
-			goto leave;
-		}
-	}
-
-	if (!hci_set_adv_enable (hcidev, enable)) {
-		error ("failed to %sable advertising",
-		       enable ? "en" : "dis");
-		goto leave;
-	}
-
-	ret = hci_set_adv_data (
-		hcidev, self->magic,
-		btd_adapter_get_name (self->adapter));
-	if (ret != 0) {
-		error ("setting arc data failed (%d)", ret);
-		goto leave;
-	}
-
-	rv = TRUE;
-leave:
-	if (hcidev >= 0)
-		hci_close_dev (hcidev);
-
-	if (hcisock >= 0)
-		close (hcisock);
-
-	if (rv)
-		self->adv = enable;
-
-	return rv;
 }

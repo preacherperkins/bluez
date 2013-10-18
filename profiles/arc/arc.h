@@ -144,7 +144,6 @@ ARCChar* arc_char_table_find_by_name (GHashTable *table,
 				      const char *name);
 
 
-
 /**
  * Clear all working data such as half-written chunked data
  *
@@ -152,12 +151,12 @@ ARCChar* arc_char_table_find_by_name (GHashTable *table,
  */
 void arc_char_table_clear_working_data (GHashTable *table);
 
-
 #define ARC_GATT_BLURB_PRE  0xfe
 /**< prefix for an ARC blurb */
 
 #define ARC_GATT_BLURB_POST 0xff
 /**< suffix for an ARC blurb */
+
 
 /* ids for the various handles */
 typedef enum {
@@ -171,6 +170,21 @@ typedef enum {
 	ARC_ID_NUM
 } ARCID;
 
+
+int arc_probe_proxy (struct btd_service *service);
+void arc_remove_proxy (struct btd_service *service);
+
+int  arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter);
+void arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter);
+
+
+ARCID arc_prop_to_id (const char *prop) G_GNUC_CONST;
+const char* arc_id_to_prop (ARCID id) G_GNUC_CONST;
+
+void arc_dump_bytes (uint8_t *bytes, size_t len);
+
+gboolean arc_enable_advertising (struct btd_adapter *adapter, uint8_t magic,
+				 gboolean enable);
 
 #define ANSI_RED		"\x1b[31m"
 #define ANSI_GREEN		"\x1b[32m"
@@ -188,15 +202,6 @@ void arc_log (const char *col, const char *frm, ...);
 #endif /*COLOR_DBG*/
 
 
-int arc_probe_proxy (struct btd_service *service);
-void arc_remove_proxy (struct btd_service *service);
-
-int  arc_probe_server (struct btd_profile *profile, struct btd_adapter *adapter);
-void arc_remove_server (struct btd_profile *profile, struct btd_adapter *adapter);
-
-
-ARCID arc_prop_to_id (const char *prop) G_GNUC_CONST;
-const char* arc_id_to_prop (ARCID id) G_GNUC_CONST;
 
 G_END_DECLS
 
