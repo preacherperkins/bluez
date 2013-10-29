@@ -21,22 +21,49 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <stdint.h>
+#include <stdbool.h>
+
 #include <glib.h>
 
 #include "lib/bluetooth.h"
+#include "log.h"
+#include "hal-msg.h"
+#include "ipc.h"
+#include "hid.h"
 
-typedef void (*bt_adapter_ready)(int err);
+static GIOChannel *notification_io = NULL;
 
-void bt_adapter_init(uint16_t index, struct mgmt *mgmt_if,
-							bt_adapter_ready cb);
+void bt_hid_handle_cmd(GIOChannel *io, uint8_t opcode, void *buf, uint16_t len)
+{
+	uint8_t status = HAL_STATUS_FAILED;
 
-void bt_adapter_handle_cmd(GIOChannel *io, uint8_t opcode, void *buf,
-								uint16_t len);
+	switch (opcode) {
+	case HAL_OP_HID_CONNECT:
+		break;
+	case HAL_OP_HID_DISCONNECT:
+		break;
+	default:
+		DBG("Unhandled command, opcode 0x%x", opcode);
+		break;
+	}
 
-const bdaddr_t *bt_adapter_get_address(void);
+	ipc_send_rsp(io, HAL_SERVICE_ID_HIDHOST, status);
+}
 
-bool bt_adapter_register(GIOChannel *io);
-void bt_adapter_unregister(void);
+bool bt_hid_register(GIOChannel *io, const bdaddr_t *addr)
+{
+	DBG("");
+
+	notification_io = g_io_channel_ref(io);
+
+	return true;
+}
+
+void bt_hid_unregister(void)
+{
+	DBG("");
+
+	g_io_channel_unref(notification_io);
+	notification_io = NULL;
+}

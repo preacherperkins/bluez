@@ -94,7 +94,9 @@ INTMAP(bt_property_type_t, -1, "(unknown)")
 	DELEMENT(BT_PROPERTY_ADAPTER_DISCOVERY_TIMEOUT),
 	DELEMENT(BT_PROPERTY_REMOTE_FRIENDLY_NAME),
 	DELEMENT(BT_PROPERTY_REMOTE_RSSI),
+#if PLATFORM_SDK_VERSION > 17
 	DELEMENT(BT_PROPERTY_REMOTE_VERSION_INFO),
+#endif
 	DELEMENT(BT_PROPERTY_REMOTE_DEVICE_TIMESTAMP),
 ENDMAP
 
@@ -135,9 +137,9 @@ int int2str_findstr(const char *str, const struct int2str m[])
  */
 char *bt_bdaddr_t2str(const bt_bdaddr_t *bd_addr, char *buf)
 {
-	const char *p = (const char *) bd_addr;
+	const uint8_t *p = bd_addr->address;
 
-	snprintf(buf, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+	snprintf(buf, MAX_ADDR_STR_LEN, "%02x:%02x:%02x:%02x:%02x:%02x",
 					p[0], p[1], p[2], p[3], p[4], p[5]);
 
 	return buf;
@@ -146,10 +148,10 @@ char *bt_bdaddr_t2str(const bt_bdaddr_t *bd_addr, char *buf)
 /* converts string to bt_bdaddr_t */
 void str2bt_bdaddr_t(const char *str, bt_bdaddr_t *bd_addr)
 {
-	char *p = (char *) bd_addr;
+	uint8_t *p = bd_addr->address;
 
 	sscanf(str, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
-			       &p[0], &p[1], &p[2], &p[3], &p[4], &p[5]);
+				&p[0], &p[1], &p[2], &p[3], &p[4], &p[5]);
 }
 
 static const char BT_BASE_UUID[] = {
@@ -202,4 +204,25 @@ void str2bt_uuid_t(const char *str, bt_uuid_t *uuid)
 		i++;
 		str += 2;
 	}
+}
+
+const char *enum_defines(void *v, int i)
+{
+	const struct int2str *m = v;
+
+	return m[i].str != NULL ? m[i].str : NULL;
+}
+
+const char *enum_strings(void *v, int i)
+{
+	const char **m = v;
+
+	return m[i] != NULL ? m[i] : NULL;
+}
+
+const char *enum_one_string(void *v, int i)
+{
+	const char *m = v;
+
+	return (i == 0) && (m[0] != 0) ? m : NULL;
 }

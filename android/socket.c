@@ -21,22 +21,21 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <glib.h>
+#include <stdbool.h>
 
 #include "lib/bluetooth.h"
+#include "log.h"
+#include "socket.h"
 
-typedef void (*bt_adapter_ready)(int err);
+bool bt_socket_register(GIOChannel *io, const bdaddr_t *addr)
+{
+	DBG("");
 
-void bt_adapter_init(uint16_t index, struct mgmt *mgmt_if,
-							bt_adapter_ready cb);
+	return true;
+}
 
-void bt_adapter_handle_cmd(GIOChannel *io, uint8_t opcode, void *buf,
-								uint16_t len);
-
-const bdaddr_t *bt_adapter_get_address(void);
-
-bool bt_adapter_register(GIOChannel *io);
-void bt_adapter_unregister(void);
+void bt_socket_unregister(void)
+{
+	DBG("");
+}

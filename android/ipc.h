@@ -21,62 +21,6 @@
  *
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <unistd.h>
-#include <sys/uio.h>
-
-#include <glib.h>
-
-void info(const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-
-	vfprintf(stdout, format, ap);
-	fprintf(stdout, "\n");
-
-	va_end(ap);
-}
-
-void warn(const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-
-	vfprintf(stderr, format, ap);
-	fprintf(stderr, "\n");
-
-	va_end(ap);
-}
-
-void error(const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-
-	vfprintf(stderr, format, ap);
-	fprintf(stderr, "\n");
-
-	va_end(ap);
-}
-
-void btd_debug(const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-
-	vfprintf(stdout, format, ap);
-	fprintf(stdout, "\n");
-
-	va_end(ap);
-}
+void ipc_send(GIOChannel *io, uint8_t service_id, uint8_t opcode, uint16_t len,
+							void *param, int fd);
+void ipc_send_rsp(GIOChannel *io, uint8_t service_id, uint8_t status);

@@ -706,6 +706,75 @@ struct bt_hci_cmd_write_voice_setting {
 	uint16_t setting;
 } __attribute__ ((packed));
 
+#define BT_HCI_CMD_READ_AUTO_FLUSH_TIMEOUT	0x0c27
+struct bt_hci_cmd_read_auto_flush_timeout {
+	uint16_t handle;
+} __attribute__ ((packed));
+struct bt_hci_rsp_read_auto_flush_timeout {
+	uint8_t  status;
+	uint16_t handle;
+	uint16_t timeout;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_AUTO_FLUSH_TIMEOUT	0x0c28
+struct bt_hci_cmd_write_auto_flush_timeout {
+	uint16_t handle;
+	uint16_t timeout;
+} __attribute__ ((packed));
+struct bt_hci_rsp_write_auto_flush_timeout {
+	uint8_t  status;
+	uint16_t handle;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_NUM_BROADCAST_RETRANS	0x0c29
+struct bt_hci_rsp_read_num_broadcast_retrans {
+	uint8_t  status;
+	uint8_t  num_retrans;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_NUM_BROADCAST_RETRANS	0x0c2a
+struct bt_hci_cmd_write_num_broadcast_retrans {
+	uint8_t  num_retrans;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_HOLD_MODE_ACTIVITY	0x0c2b
+struct bt_hci_rsp_read_hold_mode_activity {
+	uint8_t  status;
+	uint8_t  activity;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_HOLD_MODE_ACTIVITY	0x0c2c
+struct bt_hci_cmd_write_hold_mode_activity {
+	uint8_t  activity;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_TX_POWER		0x0c2d
+struct bt_hci_cmd_read_tx_power {
+	uint16_t handle;
+	uint8_t  type;
+} __attribute__ ((packed));
+struct bt_hci_rsp_read_tx_power {
+	uint8_t  status;
+	uint16_t handle;
+	int8_t   level;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_READ_SYNC_FLOW_CONTROL	0x0c2e
+struct bt_hci_rsp_read_sync_flow_control {
+	uint8_t  status;
+	uint8_t  enable;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_WRITE_SYNC_FLOW_CONTROL	0x0c2f
+struct bt_hci_cmd_write_sync_flow_control {
+	uint8_t  enable;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_SET_HOST_FLOW_CONTROL	0x0c31
+struct bt_hci_cmd_set_host_flow_control {
+	uint8_t  enable;
+} __attribute__ ((packed));
+
 #define BT_HCI_CMD_HOST_BUFFER_SIZE		0x0c33
 struct bt_hci_cmd_host_buffer_size {
 	uint16_t acl_mtu;
@@ -875,6 +944,16 @@ struct bt_hci_cmd_write_inquiry_tx_power {
 struct bt_hci_cmd_enhanced_flush {
 	uint16_t handle;
 	uint8_t  type;
+} __attribute__ ((packed));
+
+#define BT_HCI_CMD_SEND_KEYPRESS_NOTIFY		0x0c60
+struct bt_hci_cmd_send_keypress_notify {
+	uint8_t  bdaddr[6];
+	uint8_t  type;
+} __attribute__ ((packed));
+struct bt_hci_rsp_send_keypress_notify {
+	uint8_t  status;
+	uint8_t  bdaddr[6];
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_SET_EVENT_MASK_PAGE2		0x0c63
@@ -1106,6 +1185,11 @@ struct bt_hci_rsp_write_remote_amp_assoc {
 } __attribute__ ((packed));
 
 #define BT_HCI_CMD_ENABLE_DUT_MODE		0x1803
+
+#define BT_HCI_CMD_WRITE_SSP_DEBUG_MODE		0x1804
+struct bt_hci_cmd_write_ssp_debug_mode {
+	uint8_t  mode;
+} __attribute__ ((packed));
 
 #define BT_HCI_CMD_LE_SET_EVENT_MASK		0x2001
 struct bt_hci_cmd_le_set_event_mask {

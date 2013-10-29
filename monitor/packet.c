@@ -599,7 +599,7 @@ static const struct {
 	const char *str;
 } major_class_av_table[] = {
 	{ 0x00, "Uncategorized, code for device not assigned"	},
-	{ 0x01, "earable Headset Device"			},
+	{ 0x01, "Wearable Headset Device"			},
 	{ 0x02, "Hands-free Device"				},
 	{ 0x04, "Microphone"					},
 	{ 0x05, "Loudspeaker"					},
@@ -738,6 +738,96 @@ static void print_dev_class(const uint8_t *dev_class)
 	if (mask)
 		print_text(COLOR_UNKNOWN_SERVICE_CLASS,
 				"  Unknown service class (0x%2.2x)", mask);
+}
+
+static void print_num_broadcast_retrans(uint8_t num_retrans)
+{
+	print_field("Number of broadcast retransmissions: %u", num_retrans);
+}
+
+static void print_hold_mode_activity(uint8_t activity)
+{
+	print_field("Activity: 0x%2.2x", activity);
+
+	if (activity == 0x00) {
+		print_field("  Maintain current Power State");
+		return;
+	}
+
+	if (activity & 0x01)
+		print_field("  Suspend Page Scan");
+	if (activity & 0x02)
+		print_field("  Suspend Inquiry Scan");
+	if (activity & 0x04)
+		print_field("  Suspend Periodic Inquiries");
+}
+
+static void print_power_type(uint8_t type)
+{
+	const char *str;
+
+	switch (type) {
+	case 0x00:
+		str = "Current Transmit Power Level";
+		break;
+	case 0x01:
+		str = "Maximum Transmit Power Level";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Type: %s (0x%2.2x)", str, type);
+}
+
+static void print_power_level(int8_t level)
+{
+	print_field("TX power: %d dBm", level);
+}
+
+static void print_sync_flow_control(uint8_t enable)
+{
+	const char *str;
+
+	switch (enable) {
+	case 0x00:
+		str = "Disabled";
+		break;
+	case 0x01:
+		str = "Enabled";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Flow control: %s (0x%2.2x)", str, enable);
+}
+
+static void print_host_flow_control(uint8_t enable)
+{
+	const char *str;
+
+	switch (enable) {
+	case 0x00:
+		str = "Off";
+		break;
+	case 0x01:
+		str = "ACL Data Packets";
+		break;
+	case 0x02:
+		str = "Synchronous Data Packets";
+		break;
+	case 0x03:
+		str = "ACL and Synchronous Data Packets";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Flow control: %s (0x%2.2x)", str, enable);
 }
 
 static void print_voice_setting(uint16_t setting)
@@ -922,6 +1012,25 @@ static void print_simple_pairing_mode(uint8_t mode)
 	}
 
 	print_field("Mode: %s (0x%2.2x)", str, mode);
+}
+
+static void print_ssp_debug_mode(uint8_t mode)
+{
+	const char *str;
+
+	switch (mode) {
+	case 0x00:
+		str = "Disabled";
+		break;
+	case 0x01:
+		str = "Enabled";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Debug mode: %s (0x%2.2x)", str, mode);
 }
 
 static void print_pscan_rep_mode(uint8_t pscan_rep_mode)
@@ -1587,6 +1696,14 @@ static void print_channel_map(const uint8_t *map)
 		sprintf(str + (i * 2), "%2.2x", map[i]);
 
 	print_field("Channel map: 0x%s", str);
+}
+
+static void print_flush_timeout(uint16_t timeout)
+{
+	if (timeout)
+		print_timeout(timeout);
+	else
+		print_field("Timeout: No Automatic Flush");
 }
 
 void packet_print_version(const char *label, uint8_t version,
@@ -3601,6 +3718,107 @@ static void write_voice_setting_cmd(const void *data, uint8_t size)
 	print_voice_setting(cmd->setting);
 }
 
+static void read_auto_flush_timeout_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_read_auto_flush_timeout *cmd = data;
+
+	print_handle(cmd->handle);
+}
+
+static void read_auto_flush_timeout_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_auto_flush_timeout *rsp = data;
+
+	print_status(rsp->status);
+	print_handle(rsp->handle);
+	print_flush_timeout(rsp->timeout);
+}
+
+static void write_auto_flush_timeout_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_auto_flush_timeout *cmd = data;
+
+	print_handle(cmd->handle);
+	print_flush_timeout(cmd->timeout);
+}
+
+static void write_auto_flush_timeout_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_write_auto_flush_timeout *rsp = data;
+
+	print_status(rsp->status);
+	print_handle(rsp->handle);
+}
+
+static void read_num_broadcast_retrans_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_num_broadcast_retrans *rsp = data;
+
+	print_status(rsp->status);
+	print_num_broadcast_retrans(rsp->num_retrans);
+}
+
+static void write_num_broadcast_retrans_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_num_broadcast_retrans *cmd = data;
+
+	print_num_broadcast_retrans(cmd->num_retrans);
+}
+
+static void read_hold_mode_activity_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_hold_mode_activity *rsp = data;
+
+	print_status(rsp->status);
+	print_hold_mode_activity(rsp->activity);
+}
+
+static void write_hold_mode_activity_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_hold_mode_activity *cmd = data;
+
+	print_hold_mode_activity(cmd->activity);
+}
+
+static void read_tx_power_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_read_tx_power *cmd = data;
+
+	print_handle(cmd->handle);
+	print_power_type(cmd->type);
+}
+
+static void read_tx_power_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_tx_power *rsp = data;
+
+	print_status(rsp->status);
+	print_handle(rsp->handle);
+	print_power_level(rsp->level);
+}
+
+static void read_sync_flow_control_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_read_sync_flow_control *rsp = data;
+
+	print_status(rsp->status);
+	print_sync_flow_control(rsp->enable);
+}
+
+static void write_sync_flow_control_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_sync_flow_control *cmd = data;
+
+	print_sync_flow_control(cmd->enable);
+}
+
+static void set_host_flow_control_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_set_host_flow_control *cmd = data;
+
+	print_host_flow_control(cmd->enable);
+}
+
 static void host_buffer_size_cmd(const void *data, uint8_t size)
 {
 	const struct bt_hci_cmd_host_buffer_size *cmd = data;
@@ -3824,14 +4042,14 @@ static void read_inquiry_resp_tx_power_rsp(const void *data, uint8_t size)
 	const struct bt_hci_rsp_read_inquiry_resp_tx_power *rsp = data;
 
 	print_status(rsp->status);
-	print_field("TX power: %d dBm", rsp->level);
+	print_power_level(rsp->level);
 }
 
 static void write_inquiry_tx_power_cmd(const void *data, uint8_t size)
 {
 	const struct bt_hci_cmd_write_inquiry_tx_power *cmd = data;
 
-	print_field("TX power: %d dBm", cmd->level);
+	print_power_level(cmd->level);
 }
 
 static void enhanced_flush_cmd(const void *data, uint8_t size)
@@ -3851,6 +4069,45 @@ static void enhanced_flush_cmd(const void *data, uint8_t size)
 	}
 
 	print_field("Type: %s (0x%2.2x)", str, cmd->type);
+}
+
+static void send_keypress_notify_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_send_keypress_notify *cmd = data;
+	const char *str;
+
+	print_bdaddr(cmd->bdaddr);
+
+	switch (cmd->type) {
+	case 0x00:
+		str = "Passkey entry started";
+		break;
+	case 0x01:
+		str = "Passkey digit entered";
+		break;
+	case 0x02:
+		str = "Passkey digit erased";
+		break;
+	case 0x03:
+		str = "Passkey cleared";
+		break;
+	case 0x04:
+		str = "Passkey entry completed";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Type: %s (0x%2.2x)", str, cmd->type);
+}
+
+static void send_keypress_notify_rsp(const void *data, uint8_t size)
+{
+	const struct bt_hci_rsp_send_keypress_notify *rsp = data;
+
+	print_status(rsp->status);
+	print_bdaddr(rsp->bdaddr);
 }
 
 static void set_event_mask_page2_cmd(const void *data, uint8_t size)
@@ -4226,6 +4483,13 @@ static void write_remote_amp_assoc_rsp(const void *data, uint8_t size)
 	print_phy_handle(rsp->phy_handle);
 }
 
+static void write_ssp_debug_mode_cmd(const void *data, uint8_t size)
+{
+	const struct bt_hci_cmd_write_ssp_debug_mode *cmd = data;
+
+	print_ssp_debug_mode(cmd->mode);
+}
+
 static void le_set_event_mask_cmd(const void *data, uint8_t size)
 {
 	const struct bt_hci_cmd_le_set_event_mask *cmd = data;
@@ -4347,7 +4611,7 @@ static void le_read_adv_tx_power_rsp(const void *data, uint8_t size)
 	const struct bt_hci_rsp_le_read_adv_tx_power *rsp = data;
 
 	print_status(rsp->status);
-	print_field("TX power: %d dBm", rsp->level);
+	print_power_level(rsp->level);
 }
 
 static void le_set_adv_data_cmd(const void *data, uint8_t size)
@@ -4922,16 +5186,36 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c26,  75, "Write Voice Setting",
 				write_voice_setting_cmd, 2, true,
 				status_rsp, 1, true },
-	{ 0x0c27,  76, "Read Automatic Flush Timeout" },
-	{ 0x0c28,  77, "Write Automatic Flush Timeout" },
-	{ 0x0c29,  78, "Read Num Broadcast Retransmissions" },
-	{ 0x0c2a,  79, "Write Num Broadcast Retransmissions" },
-	{ 0x0c2b,  80, "Read Hold Mode Activity" },
-	{ 0x0c2c,  81, "Write Hold Mode Activity" },
-	{ 0x0c2d,  82, "Read Transmit Power Level" },
-	{ 0x0c2e,  83, "Read Sync Flow Control Enable" },
-	{ 0x0c2f,  84, "Write Sync Flow Control Enable" },
-	{ 0x0c31,  85, "Set Host Controller To Host Flow" },
+	{ 0x0c27,  76, "Read Automatic Flush Timeout",
+				read_auto_flush_timeout_cmd, 2, true,
+				read_auto_flush_timeout_rsp, 5, true },
+	{ 0x0c28,  77, "Write Automatic Flush Timeout",
+				write_auto_flush_timeout_cmd, 4, true,
+				write_auto_flush_timeout_rsp, 3, true },
+	{ 0x0c29,  78, "Read Num Broadcast Retransmissions",
+				null_cmd, 0, true,
+				read_num_broadcast_retrans_rsp, 2, true },
+	{ 0x0c2a,  79, "Write Num Broadcast Retransmissions",
+				write_num_broadcast_retrans_cmd, 1, true,
+				status_rsp, 1, true },
+	{ 0x0c2b,  80, "Read Hold Mode Activity",
+				null_cmd, 0, true,
+				read_hold_mode_activity_rsp, 2, true },
+	{ 0x0c2c,  81, "Write Hold Mode Activity",
+				write_hold_mode_activity_cmd, 1, true,
+				status_rsp, 1, true },
+	{ 0x0c2d,  82, "Read Transmit Power Level",
+				read_tx_power_cmd, 3, true,
+				read_tx_power_rsp, 4, true },
+	{ 0x0c2e,  83, "Read Sync Flow Control Enable",
+				null_cmd, 0, true,
+				read_sync_flow_control_rsp, 2, true },
+	{ 0x0c2f,  84, "Write Sync Flow Control Enable",
+				write_sync_flow_control_cmd, 1, true,
+				status_rsp, 1, true },
+	{ 0x0c31,  85, "Set Controller To Host Flow Control",
+				set_host_flow_control_cmd, 1, true,
+				status_rsp, 1, true },
 	{ 0x0c33,  86, "Host Buffer Size",
 				host_buffer_size_cmd, 7, true,
 				status_rsp, 1, true },
@@ -5017,7 +5301,9 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x0c5b, 147, "Write Default Erroneous Reporting" },
 	{ 0x0c5f, 158, "Enhanced Flush",
 				enhanced_flush_cmd, 3, true },
-	{ 0x0c60, 162, "Send Keypress Notification" },
+	{ 0x0c60, 162, "Send Keypress Notification",
+				send_keypress_notify_cmd, 7, true,
+				send_keypress_notify_rsp, 7, true },
 	{ 0x0c61, 176, "Read Logical Link Accept Timeout" },
 	{ 0x0c62, 177, "Write Logical Link Accept Timeout" },
 	{ 0x0c63, 178, "Set Event Mask Page 2",
@@ -5126,7 +5412,9 @@ static const struct opcode_data opcode_table[] = {
 	{ 0x1803, 130, "Enable Device Under Test Mode",
 				null_cmd, 0, true,
 				status_rsp, 1, true },
-	{ 0x1804, 157, "Write Simple Pairing Debug Mode" },
+	{ 0x1804, 157, "Write Simple Pairing Debug Mode",
+				write_ssp_debug_mode_cmd, 1, true,
+				status_rsp, 1, true },
 	{ 0x1807, 189, "Enable AMP Receiver Reports" },
 	{ 0x1808, 190, "AMP Test End" },
 	{ 0x1809, 191, "AMP Test" },
@@ -6471,4 +6759,37 @@ void packet_hci_scodata(struct timeval *tv, uint16_t index, bool in,
 
 	if (filter_mask & PACKET_FILTER_SHOW_SCO_DATA)
 		packet_hexdump(data, size);
+}
+
+void packet_todo(void)
+{
+	int i;
+
+	printf("HCI commands with missing decodings:\n");
+
+	for (i = 0; opcode_table[i].str; i++) {
+		if (opcode_table[i].bit < 0)
+			continue;
+
+		if (opcode_table[i].cmd_func)
+			continue;
+
+		printf("\t%s\n", opcode_table[i].str);
+	}
+
+	printf("HCI events with missing decodings:\n");
+
+	for (i = 0; event_table[i].str; i++) {
+		if (event_table[i].func)
+			continue;
+
+		printf("\t%s\n", event_table[i].str);
+	}
+
+	for (i = 0; subevent_table[i].str; i++) {
+		if (subevent_table[i].func)
+			continue;
+
+		printf("\t%s\n", subevent_table[i].str);
+	}
 }

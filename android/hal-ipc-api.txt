@@ -117,7 +117,9 @@ Core Service (ID 0)
 
 	Opcode 0x00 - Error response
 
-		Response parameters: Error (1 octet)
+		Response parameters: Status (1 octet)
+
+		Valid status values: 0x01	Failed
 
 	Opcode 0x01 - Register module command/response
 
@@ -279,6 +281,11 @@ Commands and responses:
 		                    Passkey (4 octets)
 		Response parameters: <none>
 
+		Valid SSP variant values: 0x00 = Passkey Confirmation
+		                          0x01 = Passkey Entry
+		                          0x02 = Consent (for Just Works)
+		                          0x03 = Passkey Notification
+
 		In case of an error, the error response will be returned.
 
 	Opcode 0x12 - DUT Mode Configure command/response
@@ -311,6 +318,9 @@ Notifications:
 	Opcode 0x81 - Adapter State Changed notification
 
 		Notifications parameters: State (1 octect)
+
+		Valid state values: 0x00 = Off
+		                    0x01 = On
 
 	Opcode 0x82 - Adapter Properties Changed notification
 
@@ -1013,7 +1023,7 @@ Notifications:
 Bluetooth Advanced Audio HAL (ID 6)
 ===================================
 
-Android HAL name: "ad2p" (BT_PROFILE_ADVANCED_AUDIO_ID)
+Android HAL name: "a2dp" (BT_PROFILE_ADVANCED_AUDIO_ID)
 
 Commands and responses:
 

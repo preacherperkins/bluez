@@ -14,7 +14,11 @@ include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
 	main.c \
-	log.c \
+	adapter.c \
+	hid.c \
+	socket.c \
+	ipc.c ipc.h \
+	../src/log.c \
 	../src/shared/mgmt.c \
 	../src/shared/util.c \
 	../src/sdpd-database.c \
@@ -34,10 +38,23 @@ LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/../src \
 	$(LOCAL_PATH)/../lib \
 
-LOCAL_CFLAGS := -DVERSION=\"$(BLUEZ_VERSION)\"
+LOCAL_CFLAGS := -DVERSION=\"$(BLUEZ_VERSION)\" \
+	-DPLATFORM_SDK_VERSION=$(PLATFORM_SDK_VERSION)
 
 LOCAL_SHARED_LIBRARIES := \
 	libglib \
+
+lib_headers := \
+	bluetooth.h \
+	hci.h \
+	hci_lib.h \
+	l2cap.h \
+	sdp_lib.h \
+	sdp.h \
+
+$(shell mkdir -p $(LOCAL_PATH)/../lib/bluetooth)
+
+$(foreach file,$(lib_headers), $(shell ln -sf ../$(file) $(LOCAL_PATH)/../lib/bluetooth/$(file)))
 
 LOCAL_MODULE := bluetoothd
 
@@ -50,8 +67,16 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
-	hal_bluetooth.c \
-	hal_bt_sock.c \
+	hal-ipc.c \
+	hal-bluetooth.c \
+	hal-sock.c \
+	hal-hidhost.c \
+	hal-pan.c \
+	hal-av.c \
+	client/textconv.c \
+
+LOCAL_C_INCLUDES += \
+	$(call include-path-for, system-core) \
 
 LOCAL_SHARED_LIBRARIES := \
 	libcutils \
@@ -60,6 +85,7 @@ LOCAL_MODULE := bluetooth.default
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_REQUIRED_MODULES := haltest bluetoothd
 
 include $(BUILD_SHARED_LIBRARY)
 
@@ -75,7 +101,15 @@ LOCAL_SRC_FILES := \
 	client/terminal.c \
 	client/history.c \
 	client/textconv.c \
+	client/tabcompletion.c \
+	client/if-av.c \
 	client/if-bt.c \
+	client/if-hf.c \
+	client/if-hh.c \
+	client/if-pan.c \
+	client/if-sock.c \
+
+LOCAL_CFLAGS := -DPLATFORM_SDK_VERSION=$(PLATFORM_SDK_VERSION)
 
 LOCAL_SHARED_LIBRARIES := libhardware
 

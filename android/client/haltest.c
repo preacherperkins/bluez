@@ -31,8 +31,39 @@
 
 const struct interface *interfaces[] = {
 	&bluetooth_if,
+	&av_if,
+	&hf_if,
+	&hh_if,
+	&pan_if,
+	&sock_if,
 	NULL
 };
+
+static struct method commands[];
+
+struct method *get_method(struct method *methods, const char *name)
+{
+	while (strcmp(methods->name, "") != 0) {
+		if (strcmp(methods->name, name) == 0)
+			return methods;
+		methods++;
+	}
+
+	return NULL;
+}
+
+/* function returns interface of given name or NULL if not found */
+const struct interface *get_interface(const char *name)
+{
+	int i;
+
+	for (i = 0; interfaces[i] != NULL; ++i) {
+		if (strcmp(interfaces[i]->name, name) == 0)
+			break;
+	}
+
+	return interfaces[i];
+}
 
 int haltest_error(const char *format, ...)
 {
@@ -64,14 +95,143 @@ int haltest_warn(const char *format, ...)
 	return ret;
 }
 
+static void help_print_interface(const struct interface *i)
+{
+	struct method *m;
+
+	for (m = i->methods; strcmp(m->name, "") != 0; m++)
+		haltest_info("%s %s %s\n", i->name, m->name,
+						(m->help ? m->help : ""));
+}
+
+/* Help completion */
+static void help_c(int argc, const char **argv, enum_func *enum_func,
+								void **user)
+{
+	if (argc == 2)
+		*enum_func = interface_name;
+}
+
+/* Help execution */
+static void help_p(int argc, const char **argv)
+{
+	const struct method *m = commands;
+	const struct interface **ip = interfaces;
+	const struct interface *i;
+
+	if (argc == 1) {
+		terminal_print("haltest allows to call Android HAL methods.\n");
+		terminal_print("\nAvailable commands:\n");
+		while (0 != strcmp(m->name, "")) {
+			terminal_print("\t%s %s\n", m->name,
+						(m->help ? m->help : ""));
+			m++;
+		}
+
+		terminal_print("\nAvailable interfaces to use:\n");
+		while (NULL != *ip) {
+			terminal_print("\t%s\n", (*ip)->name);
+			ip++;
+		}
+
+		terminal_print("\nTo get help on methods for each interface type:\n");
+		terminal_print("\n\thelp <inerface>\n");
+		terminal_print("\nBasic scenario:\n\tadapter init\n");
+		terminal_print("\tadapter enable\n\tadapter start_discovery\n");
+		terminal_print("\tadapter get_profile_interface handsfree\n");
+		terminal_print("\thandsfree init\n\n");
+		return;
+	}
+
+	i = get_interface(argv[1]);
+	if (i == NULL) {
+		haltest_error("No such interface\n");
+		return;
+	}
+
+	help_print_interface(i);
+}
+
+/* quit/exit execution */
+static void quit_p(int argc, const char **argv)
+{
+	exit(0);
+}
+
+static int fd_stack[10];
+static int fd_stack_pointer = 0;
+
+static void stdin_handler(struct pollfd *pollfd);
+
+static void process_file(const char *name)
+{
+	int fd = open(name, O_RDONLY);
+
+	if (fd < 0) {
+		haltest_error("Can't open file: %s for reading\n", name);
+		return;
+	}
+
+	if (fd_stack_pointer >= 10) {
+		haltest_error("To many open files\n");
+		close(fd);
+		return;
+	}
+
+	fd_stack[fd_stack_pointer++] = fd;
+	poll_unregister_fd(fd_stack[fd_stack_pointer - 2], stdin_handler);
+	poll_register_fd(fd_stack[fd_stack_pointer - 1], POLLIN, stdin_handler);
+}
+
+static void source_p(int argc, const char **argv)
+{
+	if (argc < 2) {
+		haltest_error("No file specified");
+		return;
+	}
+
+	process_file(argv[1]);
+}
+
+/* Commands available without interface */
+static struct method commands[] = {
+	STD_METHODCH(help, "[<interface>]"),
+	STD_METHOD(quit),
+	METHOD("exit", quit_p, NULL, NULL),
+	STD_METHODH(source, "<file>"),
+	END_METHOD
+};
+
+/* Gets comman by name */
+struct method *get_command(const char *name)
+{
+	return get_method(commands, name);
+}
+
+/* Function to enumerate interface names */
+const char *interface_name(void *v, int i)
+{
+	return interfaces[i] ? interfaces[i]->name : NULL;
+}
+
+/* Function to enumerate command and interface names */
+const char *command_name(void *v, int i)
+{
+	int cmd_cnt = (int) (sizeof(commands)/sizeof(commands[0]) - 1);
+
+	if (i >= cmd_cnt)
+		return interface_name(v, i - cmd_cnt);
+	else
+		return commands[i].name;
+}
+
 /*
  * This function changes input parameter line_buffer so it has
  * null termination after each token (due to strtok)
  * Output argv is filled with pointers to arguments
  * returns number of tokens parsed - argc
  */
-static int command_line_to_argv(char *line_buffer,
-				char *argv[], int argv_size)
+static int command_line_to_argv(char *line_buffer, char *argv[], int argv_size)
 {
 	static const char *token_breaks = "\r\n\t ";
 	char *token;
@@ -91,7 +251,7 @@ static void process_line(char *line_buffer)
 	char *argv[10];
 	int argc;
 	int i = 0;
-	int j;
+	struct method *m;
 
 	argc = command_line_to_argv(line_buffer, argv, 10);
 	if (argc < 1)
@@ -102,32 +262,27 @@ static void process_line(char *line_buffer)
 			i++;
 			continue;
 		}
+
 		if (argc < 2 || strcmp(argv[1], "?") == 0) {
-			j = 0;
-			while (strcmp(interfaces[i]->methods[j].name, "")) {
-				haltest_info("%s %s\n", argv[0],
-						interfaces[i]->methods[j].name);
-				++j;
-			}
+			help_print_interface(interfaces[i]);
 			return;
 		}
-		j = 0;
-		while (strcmp(interfaces[i]->methods[j].name, "")) {
-			if (strcmp(interfaces[i]->methods[j].name, argv[1])) {
-				j++;
-				continue;
-			}
-			interfaces[i]->methods[j].func(argc,
-							(const char **)argv);
-			break;
-		}
-		if (strcmp(interfaces[i]->methods[j].name, "") == 0)
-			printf("No function %s found\n", argv[1]);
-		break;
-	}
 
-	if (interfaces[i] == NULL)
-		printf("No such interface %s\n", argv[0]);
+		m = get_method(interfaces[i]->methods, argv[1]);
+		if (m != NULL) {
+			m->func(argc, (const char **) argv);
+			return;
+		}
+
+		haltest_error("No function %s found\n", argv[1]);
+		return;
+	}
+	/* No interface, try commands */
+	m = get_command(argv[0]);
+	if (m == NULL)
+		haltest_error("No such command %s\n", argv[0]);
+	else
+		m->func(argc, (const char **) argv);
 }
 
 /* called when there is something on stdin */
@@ -136,24 +291,41 @@ static void stdin_handler(struct pollfd *pollfd)
 	char buf[10];
 
 	if (pollfd->revents & POLLIN) {
-		int count = read(0, buf, 10);
+		int count = read(fd_stack[fd_stack_pointer - 1], buf, 10);
 
 		if (count > 0) {
 			int i;
 
 			for (i = 0; i < count; ++i)
 				terminal_process_char(buf[i], process_line);
+			return;
 		}
+	}
+
+	if (fd_stack_pointer > 1)
+		poll_register_fd(fd_stack[fd_stack_pointer - 2], POLLIN,
+								stdin_handler);
+	if (fd_stack_pointer > 0) {
+		poll_unregister_fd(fd_stack[--fd_stack_pointer], stdin_handler);
+
+		if (fd_stack[fd_stack_pointer])
+			close(fd_stack[fd_stack_pointer]);
 	}
 }
 
 int main(int argc, char **argv)
 {
+	struct stat rcstat;
+
 	terminal_setup();
 	history_restore(".haltest_history");
 
+	fd_stack[fd_stack_pointer++] = 0;
 	/* Register command line handler */
 	poll_register_fd(0, POLLIN, stdin_handler);
+
+	if (stat(".haltestrc", &rcstat) == 0 && (rcstat.st_mode & S_IFREG) != 0)
+		process_file(".haltestrc");
 
 	poll_dispatch_loop();
 

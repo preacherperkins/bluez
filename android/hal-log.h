@@ -15,18 +15,21 @@
  *
  */
 
-#include <hardware/bluetooth.h>
-#include <hardware/bt_sock.h>
-#include <hardware/bt_hh.h>
-#include <hardware/bt_pan.h>
-#include <hardware/bt_av.h>
+#define LOG_TAG "BlueZ"
 
-btsock_interface_t *bt_get_sock_interface(void);
-bthh_interface_t *bt_get_hidhost_interface(void);
-btpan_interface_t *bt_get_pan_interface(void);
-btav_interface_t *bt_get_av_interface(void);
+#ifdef __BIONIC__
+#include <cutils/log.h>
+#else
+#include <stdio.h>
+#define LOG_INFO " I"
+#define LOG_WARN " W"
+#define LOG_ERROR " E"
+#define LOG_DEBUG " D"
+#define ALOG(pri, tag, fmt, arg...) printf(tag pri": " fmt"\n", ##arg)
+#endif
 
-void bt_notify_adapter(uint16_t opcode, void *buf, uint16_t len);
-void bt_thread_associate(void);
-void bt_thread_disassociate(void);
-void bt_notify_av(uint16_t opcode, void *buf, uint16_t len);
+#define info(fmt, arg...) ALOG(LOG_INFO, LOG_TAG, fmt, ##arg)
+#define warn(fmt, arg...) ALOG(LOG_WARN, LOG_TAG, fmt, ##arg)
+#define error(fmt, arg...) ALOG(LOG_ERROR, LOG_TAG, fmt, ##arg)
+#define DBG(fmt, arg...) ALOG(LOG_DEBUG, LOG_TAG, "%s:%s() "fmt, __FILE__, \
+							__func__, ##arg)

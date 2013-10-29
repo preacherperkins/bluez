@@ -31,8 +31,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdbool.h>
-#include <sys/stat.h>
-#include <sys/ioctl.h>
 #include <errno.h>
 #include <dirent.h>
 #include <time.h>
@@ -64,7 +62,6 @@
 #include "sdp-client.h"
 #include "attrib/gatt.h"
 #include "agent.h"
-#include "sdp-xml.h"
 #include "storage.h"
 #include "attrib-server.h"
 
@@ -3446,6 +3443,7 @@ static int device_browse_primary(struct btd_device *device, DBusMessage *msg)
 				attcb, NULL, NULL,
 				BT_IO_OPT_SOURCE_BDADDR,
 				adapter_get_address(adapter),
+				BT_IO_OPT_SOURCE_TYPE, BDADDR_LE_PUBLIC,
 				BT_IO_OPT_DEST_BDADDR, &device->bdaddr,
 				BT_IO_OPT_DEST_TYPE, device->bdaddr_type,
 				BT_IO_OPT_CID, ATT_CID,
