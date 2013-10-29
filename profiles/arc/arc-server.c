@@ -408,6 +408,14 @@ attr_arc_server_read (struct attribute	*attr,
 
 	len = MIN (BLE_MAXLEN, achar->val_scratch->len);
 
+	if (len == 0) { /* special case: empty */
+		static uint8_t empty[] = { 0xfe, 0xff };
+		attr->data = empty;
+		attr->len  = sizeof (empty);\
+		return 0;
+	}
+
+
 	/* we just start with this value; set the beginning-of-data
 	 * token (length is one less) */
 	if (!achar->writing) {
@@ -754,12 +762,34 @@ name_property_set (const GDBusPropertyTable *property, DBusMessageIter *iter,
 	dbus_message_iter_get_basic(iter, &name);
 	DBG ("updating name to '%s'", name);
 
-	if (adapter_set_name (aserver->adapter, name) != 0)
+	if (adapter_set_name (aserver->adapter, name) != 0) {
 		g_dbus_pending_property_error(
 			id, ERROR_INTERFACE ".InvalidArguments",
 			"Failed to update adapter name");
-	else	/* generic stuff */
-		gatt_property_set (property, iter, id, aserver);
+		return;
+	}
+
+	name_char = arc_char_table_find_by_name (aserver->char_table,
+						 property->name);
+	if (!name_char) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Unknown property");
+		return;
+	}
+
+	arc_char_set_value_string (name_char, name);
+	if (chunked_attrib_db_update (aserver, name_char)) {
+		g_dbus_pending_property_error(
+			id, ERROR_INTERFACE ".InvalidArguments",
+			"Failed to update GATT");
+		return;
+	}
+
+	g_dbus_emit_property_changed (btd_get_dbus_connection (),
+				      adapter_get_path (aserver->adapter),
+				      ARC_SERVER_IFACE, property->name);
+	g_dbus_pending_property_success (id);
 }
 
 
