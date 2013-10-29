@@ -410,11 +410,10 @@ attr_arc_server_read (struct attribute	*attr,
 
 	if (len == 0) { /* special case: empty */
 		static uint8_t empty[] = { 0xfe, 0xff };
-		attr->data = empty;
-		attr->len  = sizeof (empty);\
+		attr->data = (uint8_t*)g_memdup(empty, sizeof(empty));
+		attr->len  = sizeof (empty);
 		return 0;
 	}
-
 
 	/* we just start with this value; set the beginning-of-data
 	 * token (length is one less) */
