@@ -31,31 +31,31 @@
 #include <dbus/dbus.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
-#include "textfile.h"
+#include "src/log.h"
+#include "src/textfile.h"
 
 #include "lib/uuid.h"
 #include "lib/mgmt.h"
 #include "src/shared/mgmt.h"
 
-#include "hcid.h"
-#include "sdpd.h"
-#include "adapter.h"
-#include "device.h"
-#include "profile.h"
-#include "service.h"
-#include "dbus-common.h"
-#include "error.h"
-#include "glib-helper.h"
-#include "storage.h"
+#include "src/hcid.h"
+#include "src/sdpd.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/profile.h"
+#include "src/service.h"
+#include "src/dbus-common.h"
+#include "src/error.h"
+#include "src/uuid-helper.h"
+#include "src/storage.h"
 #include "attrib/gattrib.h"
 #include "attrib/att.h"
 #include "attrib/gatt.h"
-#include "attrib-server.h"
+#include "src/attrib-server.h"
 #include "attrib/att-database.h"
 #include "attrib/gatt-service.h"
-#include "attio.h"
-#include "eir.h"
+#include "src/attio.h"
+#include "src/eir.h"
 
 #include "arc.h"
 
@@ -88,7 +88,7 @@ each_device_disconnect (struct btd_device *device, void *data)
 
 	self = (ARCServer*)data;
 
-	if (!device_is_connected (device))
+	if (!btd_device_is_connected (device))
 		return;
 
 	DBG ("arc: automatically disconnecting");
