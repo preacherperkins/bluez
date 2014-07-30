@@ -14,10 +14,11 @@
  * limitations under the License.
  *
  */
-
-#include "tester-main.h"
+#include <stdbool.h>
 
 #include "emulator/bthost.h"
+#include "tester-main.h"
+
 #include "monitor/bt.h"
 
 static char exec_dir[PATH_MAX + 1];
@@ -412,7 +413,7 @@ static bool match_data(struct step *step)
 		return false;
 	}
 
-	if (exp->callback) {
+	if (exp->callback || step->callback) {
 		if (exp->callback != step->callback) {
 			tester_debug("Callback type don't match");
 			return false;
@@ -427,6 +428,18 @@ static bool match_data(struct step *step)
 		if (exp->callback_result.status !=
 						step->callback_result.status) {
 			tester_debug("Callback status don't match");
+			return false;
+		}
+
+		if (exp->callback_result.mode !=
+						step->callback_result.mode) {
+			tester_debug("Callback mode don't match");
+			return false;
+		}
+
+		if (exp->callback_result.report_size !=
+					step->callback_result.report_size) {
+			tester_debug("Callback report size don't match");
 			return false;
 		}
 
@@ -532,9 +545,25 @@ static void destroy_callback_step(void *data)
 	g_atomic_int_dec_and_test(&scheduled_cbacks_num);
 }
 
-static gboolean verify_callback(gpointer user_data)
+static gboolean verify_action(gpointer user_data)
 {
 	struct step *step = user_data;
+
+	verify_step(step, g_free);
+
+	return FALSE;
+}
+
+static gboolean verify_callback(gpointer user_data)
+{
+	struct test_data *data = tester_get_data();
+	struct step *step = user_data;
+
+	/* Return if callback came when all steps are already verified */
+	if (queue_isempty(data->steps)) {
+		destroy_callback_step(step);
+		return FALSE;
+	}
 
 	/*
 	 * TODO: This may call action from next step before callback data
@@ -549,6 +578,11 @@ static void schedule_callback_call(struct step *step)
 {
 	g_atomic_int_inc(&scheduled_cbacks_num);
 	g_idle_add(verify_callback, step);
+}
+
+void schedule_action_verification(struct step *step)
+{
+	g_idle_add_full(G_PRIORITY_HIGH_IDLE, verify_action, step, NULL);
 }
 
 static void adapter_state_changed_cb(bt_state_t state)
@@ -694,8 +728,11 @@ static void pin_request_cb(bt_bdaddr_t *remote_bd_addr,
 	step->callback_result.num_properties = 3;
 	step->callback_result.properties = repack_properties(3, props);
 
+	g_free(props[0]->val);
 	g_free(props[0]);
+	g_free(props[1]->val);
 	g_free(props[1]);
+	g_free(props[2]->val);
 	g_free(props[2]);
 
 	schedule_callback_call(step);
@@ -722,8 +759,11 @@ static void ssp_request_cb(bt_bdaddr_t *remote_bd_addr,
 	step->callback_result.num_properties = 3;
 	step->callback_result.properties = repack_properties(3, props);
 
+	g_free(props[0]->val);
 	g_free(props[0]);
+	g_free(props[1]->val);
 	g_free(props[1]);
+	g_free(props[2]->val);
 	g_free(props[2]);
 
 	schedule_callback_call(step);
@@ -745,14 +785,72 @@ static bt_callbacks_t bt_callbacks = {
 	.le_test_mode_cb = NULL
 };
 
+static void hidhost_connection_state_cb(bt_bdaddr_t *bd_addr,
+						bthh_connection_state_t state)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_HH_CONNECTION_STATE;
+	step->callback_result.state = state;
+
+	schedule_callback_call(step);
+}
+
+static void hidhost_virual_unplug_cb(bt_bdaddr_t *bd_addr, bthh_status_t status)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_HH_VIRTUAL_UNPLUG;
+	step->callback_result.status = status;
+
+	schedule_callback_call(step);
+}
+
+static void hidhost_protocol_mode_cb(bt_bdaddr_t *bd_addr,
+						bthh_status_t status,
+						bthh_protocol_mode_t mode)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_HH_PROTOCOL_MODE;
+	step->callback_result.status = status;
+	step->callback_result.mode = mode;
+
+	/* TODO: add bdaddr to verify? */
+
+	schedule_callback_call(step);
+}
+
+static void hidhost_hid_info_cb(bt_bdaddr_t *bd_addr, bthh_hid_info_t hid)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_HH_HID_INFO;
+
+	schedule_callback_call(step);
+}
+
+static void hidhost_get_report_cb(bt_bdaddr_t *bd_addr, bthh_status_t status,
+						uint8_t *report, int size)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_HH_GET_REPORT;
+
+	step->callback_result.status = status;
+	step->callback_result.report_size = size;
+
+	schedule_callback_call(step);
+}
+
 static bthh_callbacks_t bthh_callbacks = {
 	.size = sizeof(bthh_callbacks),
-	.connection_state_cb = NULL,
-	.hid_info_cb = NULL,
-	.protocol_mode_cb = NULL,
+	.connection_state_cb = hidhost_connection_state_cb,
+	.hid_info_cb = hidhost_hid_info_cb,
+	.protocol_mode_cb = hidhost_protocol_mode_cb,
 	.idle_time_cb = NULL,
-	.get_report_cb = NULL,
-	.virtual_unplug_cb = NULL
+	.get_report_cb = hidhost_get_report_cb,
+	.virtual_unplug_cb = hidhost_virual_unplug_cb
 };
 
 static const btgatt_client_callbacks_t btgatt_client_callbacks = {
@@ -1015,27 +1113,36 @@ static void emu_connectable_complete(uint16_t opcode, uint8_t status,
 					const void *param, uint8_t len,
 					void *user_data)
 {
-	struct step step;
+	struct step *step;
+	struct test_data *data = user_data;
 
 	switch (opcode) {
 	case BT_HCI_CMD_WRITE_SCAN_ENABLE:
+		break;
 	case BT_HCI_CMD_LE_SET_ADV_ENABLE:
+		/*
+		 * For BREDRLE emulator we want to verify step after scan
+		 * enable and not after le_set_adv_enable
+		 */
+		if (data->hciemu_type == HCIEMU_TYPE_BREDRLE)
+			return;
+
 		break;
 	default:
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
+	step = g_new0(struct step, 1);
 
 	if (status) {
 		tester_warn("Emulated remote setup failed.");
-		step.action_status = BT_STATUS_FAIL;
+		step->action_status = BT_STATUS_FAIL;
 	} else {
 		tester_warn("Emulated remote setup done.");
-		step.action_status = BT_STATUS_SUCCESS;
+		step->action_status = BT_STATUS_SUCCESS;
 	}
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void emu_setup_powered_remote_action(void)
@@ -1049,7 +1156,8 @@ void emu_setup_powered_remote_action(void)
 	if ((data->hciemu_type == HCIEMU_TYPE_LE) ||
 				(data->hciemu_type == HCIEMU_TYPE_BREDRLE))
 		bthost_set_adv_enable(bthost, 0x01, 0x02);
-	else
+
+	if (data->hciemu_type != HCIEMU_TYPE_LE)
 		bthost_write_scan_enable(bthost, 0x03);
 }
 
@@ -1059,73 +1167,127 @@ void emu_set_pin_code_action(void)
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
 	struct bthost *bthost;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	bthost = hciemu_client_get_host(data->hciemu);
 
 	bthost_set_pin_code(bthost, action_data->pin->pin,
 							action_data->pin_len);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = BT_STATUS_SUCCESS;
+	step->action_status = BT_STATUS_SUCCESS;
 
 	tester_print("Setting emu pin done.");
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void emu_set_ssp_mode_action(void)
 {
 	struct test_data *data = tester_get_data();
 	struct bthost *bthost;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	bthost = hciemu_client_get_host(data->hciemu);
 
 	bthost_write_ssp_mode(bthost, 0x01);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = BT_STATUS_SUCCESS;
+	step->action_status = BT_STATUS_SUCCESS;
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
+}
+
+void emu_add_l2cap_server_action(void)
+{
+	struct test_data *data = tester_get_data();
+	struct step *current_data_step = queue_peek_head(data->steps);
+	struct emu_set_l2cap_data *l2cap_data = current_data_step->set_data;
+	struct bthost *bthost;
+	struct step *step = g_new0(struct step, 1);
+
+	if (!l2cap_data) {
+		tester_warn("Invalid l2cap_data params");
+		return;
+	}
+
+	bthost = hciemu_client_get_host(data->hciemu);
+
+	bthost_add_l2cap_server(bthost, l2cap_data->psm, l2cap_data->func,
+							l2cap_data->user_data);
+
+	step->action_status = BT_STATUS_SUCCESS;
+
+	schedule_action_verification(step);
+}
+
+static void rfcomm_connect_cb(uint16_t handle, uint16_t cid, void *user_data,
+								bool status)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	tester_print("Connect handle %d, cid %d cb status: %d", handle, cid,
+									status);
+
+	step->action_status = BT_STATUS_SUCCESS;
+
+	schedule_action_verification(step);
+}
+
+void emu_add_rfcomm_server_action(void)
+{
+	struct test_data *data = tester_get_data();
+	struct step *current_data_step = queue_peek_head(data->steps);
+	struct bt_action_data *rfcomm_data = current_data_step->set_data;
+	struct bthost *bthost;
+	struct step *step = g_new0(struct step, 1);
+
+	if (!rfcomm_data) {
+		tester_warn("Invalid l2cap_data params");
+		return;
+	}
+
+	bthost = hciemu_client_get_host(data->hciemu);
+
+	bthost_add_rfcomm_server(bthost, rfcomm_data->channel,
+						rfcomm_connect_cb, data);
+
+	step->action_status = BT_STATUS_SUCCESS;
+
+	schedule_action_verification(step);
 }
 
 void dummy_action(void)
 {
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action = dummy_action;
+	step->action = dummy_action;
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bluetooth_enable_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->enable();
+	step->action_status = data->if_bluetooth->enable();
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bluetooth_disable_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->disable();
+	step->action_status = data->if_bluetooth->disable();
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_set_property_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 	struct step *current_data_step = queue_peek_head(data->steps);
 	bt_property_t *prop;
 
@@ -1137,17 +1299,16 @@ void bt_set_property_action(void)
 
 	prop = (bt_property_t *)current_data_step->set_data;
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->set_adapter_property(
+	step->action_status = data->if_bluetooth->set_adapter_property(
 									prop);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_get_property_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 	struct step *current_data_step = queue_peek_head(data->steps);
 	bt_property_t *prop;
 
@@ -1159,39 +1320,37 @@ void bt_get_property_action(void)
 
 	prop = (bt_property_t *)current_data_step->set_data;
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->get_adapter_property(
+	step->action_status = data->if_bluetooth->get_adapter_property(
 								prop->type);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_start_discovery_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	step.action_status = data->if_bluetooth->start_discovery();
+	step->action_status = data->if_bluetooth->start_discovery();
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_cancel_discovery_action(void)
 {
 	struct test_data *data = tester_get_data();
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->cancel_discovery();
+	step->action_status = data->if_bluetooth->cancel_discovery();
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_get_device_props_action(void)
 {
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	if (!current_data_step->set_data) {
 		tester_debug("bdaddr not defined");
@@ -1199,12 +1358,11 @@ void bt_get_device_props_action(void)
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
-	step.action_status =
+	step->action_status =
 		data->if_bluetooth->get_remote_device_properties(
 						current_data_step->set_data);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_get_device_prop_action(void)
@@ -1212,7 +1370,7 @@ void bt_get_device_prop_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	if (!action_data) {
 		tester_warn("No arguments for 'get remote device prop' req.");
@@ -1220,12 +1378,11 @@ void bt_get_device_prop_action(void)
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->get_remote_device_property(
+	step->action_status = data->if_bluetooth->get_remote_device_property(
 							action_data->addr,
 							action_data->prop_type);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_set_device_prop_action(void)
@@ -1233,7 +1390,7 @@ void bt_set_device_prop_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	if (!action_data) {
 		tester_warn("No arguments for 'set remote device prop' req.");
@@ -1241,12 +1398,11 @@ void bt_set_device_prop_action(void)
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->set_remote_device_property(
+	step->action_status = data->if_bluetooth->set_remote_device_property(
 							action_data->addr,
 							action_data->prop);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_create_bond_action(void)
@@ -1254,7 +1410,7 @@ void bt_create_bond_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	if (!action_data || !action_data->addr) {
 		tester_warn("Bad arguments for 'create bond' req.");
@@ -1262,10 +1418,10 @@ void bt_create_bond_action(void)
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->create_bond(action_data->addr);
+	step->action_status =
+			data->if_bluetooth->create_bond(action_data->addr);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_pin_reply_accept_action(void)
@@ -1273,7 +1429,7 @@ void bt_pin_reply_accept_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
 	if (!action_data || !action_data->addr || !action_data->pin) {
 		tester_warn("Bad arguments for 'pin reply' req.");
@@ -1281,13 +1437,12 @@ void bt_pin_reply_accept_action(void)
 		return;
 	}
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->pin_reply(action_data->addr,
+	step->action_status = data->if_bluetooth->pin_reply(action_data->addr,
 							TRUE,
 							action_data->pin_len,
 							action_data->pin);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_ssp_reply_accept_action(void)
@@ -1295,14 +1450,13 @@ void bt_ssp_reply_accept_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	struct bt_action_data *action_data = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->ssp_reply(action_data->addr,
+	step->action_status = data->if_bluetooth->ssp_reply(action_data->addr,
 						action_data->ssp_variant,
 						action_data->accept, 0);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_cancel_bond_action(void)
@@ -1310,12 +1464,11 @@ void bt_cancel_bond_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	bt_bdaddr_t *addr = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->cancel_bond(addr);
+	step->action_status = data->if_bluetooth->cancel_bond(addr);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 void bt_remove_bond_action(void)
@@ -1323,12 +1476,11 @@ void bt_remove_bond_action(void)
 	struct test_data *data = tester_get_data();
 	struct step *current_data_step = queue_peek_head(data->steps);
 	bt_bdaddr_t *addr = current_data_step->set_data;
-	struct step step;
+	struct step *step = g_new0(struct step, 1);
 
-	memset(&step, 0, sizeof(step));
-	step.action_status = data->if_bluetooth->remove_bond(addr);
+	step->action_status = data->if_bluetooth->remove_bond(addr);
 
-	verify_step(&step, NULL);
+	schedule_action_verification(step);
 }
 
 static void generic_test_function(const void *test_data)

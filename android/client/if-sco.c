@@ -287,7 +287,7 @@ static void *read_thread(void *data)
 {
 	int (*filbuff_cb) (short*, void*) = feed_from_in;
 	short buffer[buffer_size_in / sizeof(short)];
-	size_t len = 0;
+	ssize_t len = 0;
 	void *cb_data = NULL;
 	FILE *out = data;
 
@@ -311,6 +311,10 @@ static void *read_thread(void *data)
 		pthread_mutex_unlock(&state_mutex);
 
 		len = filbuff_cb(buffer, cb_data);
+		if (len < 0) {
+			haltest_error("Error receiving SCO data");
+			break;
+		}
 
 		haltest_info("Read %zd bytes\n", len);
 
@@ -451,6 +455,8 @@ static void read_p(int argc, const char **argv)
 		haltest_error("Cannot create playback thread!\n");
 		goto failed;
 	}
+
+	return;
 failed:
 	if (out)
 		fclose(out);
@@ -467,15 +473,17 @@ static void stop_p(int argc, const char **argv)
 		return;
 	}
 
+	if (stream_out) {
+		pthread_mutex_lock(&outstream_mutex);
+		stream_out->common.standby(&stream_out->common);
+		pthread_mutex_unlock(&outstream_mutex);
+	}
+
 	current_state = STATE_STOPPING;
 	pthread_mutex_unlock(&state_mutex);
 
 	pthread_join(play_thread, NULL);
 	play_thread = 0;
-
-	pthread_mutex_lock(&outstream_mutex);
-	stream_out->common.standby(&stream_out->common);
-	pthread_mutex_unlock(&outstream_mutex);
 
 	haltest_info("Ended %s\n", __func__);
 }

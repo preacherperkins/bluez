@@ -440,22 +440,6 @@ static void trigger_passive_scanning(struct btd_adapter *adapter);
 static bool set_mode(struct btd_adapter *adapter, uint16_t opcode,
 							uint8_t mode);
 
-static void update_pairable(struct btd_adapter *adapter)
-{
-	if (main_opts.always_pairable)
-		return;
-
-	if ((adapter->current_settings & MGMT_SETTING_DISCOVERABLE) &&
-						agent_default_available()) {
-		if (!(adapter->current_settings & MGMT_SETTING_PAIRABLE) &&
-						agent_default_available())
-			set_mode(adapter, MGMT_OP_SET_PAIRABLE, 0x01);
-	} else {
-		if (adapter->current_settings & MGMT_SETTING_PAIRABLE)
-			set_mode(adapter, MGMT_OP_SET_PAIRABLE, 0x00);
-	}
-}
-
 static void settings_changed(struct btd_adapter *adapter, uint32_t settings)
 {
 	uint32_t changed_mask;
@@ -497,11 +481,10 @@ static void settings_changed(struct btd_adapter *adapter, uint32_t settings)
 	if (changed_mask & MGMT_SETTING_DISCOVERABLE) {
 		g_dbus_emit_property_changed(dbus_conn, adapter->path,
 					ADAPTER_INTERFACE, "Discoverable");
-		update_pairable(adapter);
 		store_adapter_info(adapter);
 	}
 
-	if (changed_mask & MGMT_SETTING_PAIRABLE) {
+	if (changed_mask & MGMT_SETTING_BONDABLE) {
 		g_dbus_emit_property_changed(dbus_conn, adapter->path,
 					ADAPTER_INTERFACE, "Pairable");
 
@@ -605,7 +588,7 @@ static gboolean pairable_timeout_handler(gpointer user_data)
 
 	adapter->pairable_timeout_id = 0;
 
-	set_mode(adapter, MGMT_OP_SET_PAIRABLE, 0x00);
+	set_mode(adapter, MGMT_OP_SET_BONDABLE, 0x00);
 
 	return FALSE;
 }
@@ -617,14 +600,7 @@ static void trigger_pairable_timeout(struct btd_adapter *adapter)
 		adapter->pairable_timeout_id = 0;
 	}
 
-	if (!(adapter->current_settings & MGMT_SETTING_PAIRABLE))
-		return;
-
-	/*
-	 * If pairable is tied to connectable & discoverable then we
-	 * don't have a separate pairable timeout.
-	 */
-	if (!main_opts.always_pairable)
+	if (!(adapter->current_settings & MGMT_SETTING_BONDABLE))
 		return;
 
 	if (adapter->pairable_timeout > 0)
@@ -1093,8 +1069,6 @@ static struct btd_device *adapter_create_device(struct btd_adapter *adapter,
 	device = device_create(adapter, bdaddr, bdaddr_type);
 	if (!device)
 		return NULL;
-
-	btd_device_set_temporary(device, TRUE);
 
 	adapter->devices = g_slist_append(adapter->devices, device);
 
@@ -2035,8 +2009,8 @@ static void property_set_mode(struct btd_adapter *adapter, uint32_t setting,
 		param = &cp;
 		len = sizeof(cp);
 		break;
-	case MGMT_SETTING_PAIRABLE:
-		opcode = MGMT_OP_SET_PAIRABLE;
+	case MGMT_SETTING_BONDABLE:
+		opcode = MGMT_OP_SET_BONDABLE;
 		param = &mode;
 		len = sizeof(mode);
 		break;
@@ -2139,13 +2113,6 @@ static void property_set_discoverable_timeout(
 
 	g_dbus_pending_property_success(id);
 
-	if (!main_opts.always_pairable) {
-		adapter->pairable_timeout = value;
-		g_dbus_emit_property_changed(dbus_conn, adapter->path,
-						ADAPTER_INTERFACE,
-						"PairableTimeout");
-	}
-
 	store_adapter_info(adapter);
 
 	g_dbus_emit_property_changed(dbus_conn, adapter->path,
@@ -2161,10 +2128,7 @@ static gboolean property_get_pairable(const GDBusPropertyTable *property,
 {
 	struct btd_adapter *adapter = user_data;
 
-	if (!main_opts.always_pairable)
-		return property_get_discoverable(property, iter, user_data);
-
-	return property_get_mode(adapter, MGMT_SETTING_PAIRABLE, iter);
+	return property_get_mode(adapter, MGMT_SETTING_BONDABLE, iter);
 }
 
 static void property_set_pairable(const GDBusPropertyTable *property,
@@ -2173,12 +2137,7 @@ static void property_set_pairable(const GDBusPropertyTable *property,
 {
 	struct btd_adapter *adapter = user_data;
 
-	if (!main_opts.always_pairable) {
-		property_set_discoverable(property, iter, id, user_data);
-		return;
-	}
-
-	property_set_mode(adapter, MGMT_SETTING_PAIRABLE, iter, id);
+	property_set_mode(adapter, MGMT_SETTING_BONDABLE, iter, id);
 }
 
 static gboolean property_get_pairable_timeout(
@@ -2187,9 +2146,6 @@ static gboolean property_get_pairable_timeout(
 {
 	struct btd_adapter *adapter = user_data;
 	dbus_uint32_t value = adapter->pairable_timeout;
-
-	if (!main_opts.always_pairable)
-		return property_get_discoverable_timeout(property, iter, user_data);
 
 	dbus_message_iter_append_basic(iter, DBUS_TYPE_UINT32, &value);
 
@@ -2202,11 +2158,6 @@ static void property_set_pairable_timeout(const GDBusPropertyTable *property,
 {
 	struct btd_adapter *adapter = user_data;
 	dbus_uint32_t value;
-
-	if (!main_opts.always_pairable) {
-		property_set_discoverable_timeout(property, iter, id, user_data);
-		return;
-	}
 
 	dbus_message_iter_get_basic(iter, &value);
 
@@ -3178,26 +3129,10 @@ static void load_connections(struct btd_adapter *adapter)
 
 bool btd_adapter_get_pairable(struct btd_adapter *adapter)
 {
-	if (adapter->current_settings & MGMT_SETTING_PAIRABLE)
+	if (adapter->current_settings & MGMT_SETTING_BONDABLE)
 		return true;
 
 	return false;
-}
-
-void adapter_set_pairable(struct btd_adapter *adapter, bool enable)
-{
-	bool current = (adapter->current_settings & MGMT_SETTING_PAIRABLE);
-
-	if (main_opts.always_pairable)
-		return;
-
-	if (current == enable)
-		return;
-
-	if (enable && !(adapter->current_settings & MGMT_SETTING_DISCOVERABLE))
-		return;
-
-	set_mode(adapter, MGMT_OP_SET_PAIRABLE, enable ? 0x01 : 0x00);
 }
 
 bool btd_adapter_get_powered(struct btd_adapter *adapter)
@@ -3450,10 +3385,15 @@ void adapter_auto_connect_add(struct btd_adapter *adapter,
 	bdaddr = device_get_address(device);
 	bdaddr_type = btd_device_get_bdaddr_type(device);
 
+	if (bdaddr_type == BDADDR_BREDR) {
+		DBG("auto-connection feature is not avaiable for BR/EDR");
+		return;
+	}
+
 	memset(&cp, 0, sizeof(cp));
 	bacpy(&cp.addr.bdaddr, bdaddr);
 	cp.addr.type = bdaddr_type;
-	cp.action = 0x01;
+	cp.action = 0x02;
 
 	id = mgmt_send(adapter->mgmt, MGMT_OP_ADD_DEVICE,
 			adapter->dev_id, sizeof(cp), &cp, add_device_complete,
@@ -3504,6 +3444,11 @@ void adapter_auto_connect_remove(struct btd_adapter *adapter,
 
 	bdaddr = device_get_address(device);
 	bdaddr_type = btd_device_get_bdaddr_type(device);
+
+	if (bdaddr_type == BDADDR_BREDR) {
+		DBG("auto-connection feature is not avaiable for BR/EDR");
+		return;
+	}
 
 	memset(&cp, 0, sizeof(cp));
 	bacpy(&cp.addr.bdaddr, bdaddr);
@@ -7086,12 +7031,8 @@ static void read_info_complete(uint8_t status, uint16_t length,
 			!(adapter->current_settings & MGMT_SETTING_LE))
 		set_mode(adapter, MGMT_OP_SET_LE, 0x01);
 
-	if (main_opts.always_pairable) {
-		if (!(adapter->current_settings & MGMT_SETTING_PAIRABLE))
-			set_mode(adapter, MGMT_OP_SET_PAIRABLE, 0x01);
-	} else {
-		update_pairable(adapter);
-	}
+	if (!(adapter->current_settings & MGMT_SETTING_BONDABLE))
+		set_mode(adapter, MGMT_OP_SET_BONDABLE, 0x01);
 
 	if (!kernel_conn_control)
 		set_mode(adapter, MGMT_OP_SET_CONNECTABLE, 0x01);
@@ -7298,17 +7239,6 @@ static void read_version_complete(uint8_t status, uint16_t length,
 	if (mgmt_version < 1) {
 		error("Version 1.0 or later of management interface required");
 		abort();
-	}
-
-	/*
-	 * Pre-1.7 mgmt kernel versions don't support outgoing pairing
-	 * with pairable set to false, so we must always keep pairable
-	 * as true.
-	 */
-	if (MGMT_VERSION(mgmt_version, mgmt_revision) < MGMT_VERSION(1, 7) &&
-						!main_opts.always_pairable) {
-		info("Enabling AlwaysPairable because of old kernel");
-		main_opts.always_pairable = TRUE;
 	}
 
 	DBG("sending read supported commands command");

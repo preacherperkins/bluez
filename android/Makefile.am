@@ -154,7 +154,11 @@ android_android_tester_SOURCES = emulator/btdev.h emulator/btdev.c \
 				src/shared/timeout.h src/shared/timeout-glib.c \
 				monitor/rfcomm.h \
 				android/hardware/hardware.c \
-				android/android-tester.c
+				android/tester-bluetooth.c \
+				android/tester-socket.c \
+				android/tester-hidhost.c \
+				android/tester-gatt.c \
+				android/tester-main.h android/tester-main.c
 
 android_android_tester_CFLAGS = $(AM_CFLAGS) -I$(srcdir)/android \
 				-DPLUGINDIR=\""$(android_plugindir)"\"
@@ -162,34 +166,6 @@ android_android_tester_CFLAGS = $(AM_CFLAGS) -I$(srcdir)/android \
 android_android_tester_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
 
 android_android_tester_LDFLAGS = -pthread -ldl
-
-noinst_PROGRAMS += android/android-tester-ng
-
-android_android_tester_ng_SOURCES = emulator/btdev.h emulator/btdev.c \
-				emulator/bthost.h emulator/bthost.c \
-				emulator/smp.c \
-				src/shared/crypto.h src/shared/crypto.c \
-				src/shared/io.h src/shared/io-glib.c \
-				src/shared/queue.h src/shared/queue.c \
-				src/shared/util.h src/shared/util.c \
-				src/shared/mgmt.h src/shared/mgmt.c \
-				src/shared/hciemu.h src/shared/hciemu.c \
-				src/shared/tester.h src/shared/tester.c \
-				src/shared/timeout.h src/shared/timeout-glib.c \
-				monitor/rfcomm.h \
-				android/hardware/hardware.c \
-				android/tester-bluetooth.c \
-				android/tester-socket.c \
-				android/tester-hidhost.c \
-				android/tester-gatt.c \
-				android/tester-main.h android/tester-main.c
-
-android_android_tester_ng_CFLAGS = $(AM_CFLAGS) -I$(srcdir)/android \
-				-DPLUGINDIR=\""$(android_plugindir)"\"
-
-android_android_tester_ng_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
-
-android_android_tester_ng_LDFLAGS = -pthread -ldl
 
 noinst_PROGRAMS += android/ipc-tester
 
@@ -292,6 +268,7 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pics-hogp.txt \
 				android/pics-scpp.txt \
 				android/pics-dis.txt \
+				android/pics-avdtp.txt \
 				android/pixit-l2cap.txt \
 				android/pixit-gap.txt \
 				android/pixit-did.txt \
@@ -316,6 +293,7 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pixit-dis.txt \
 				android/pixit-rfcomm.txt \
 				android/pixit-spp.txt \
+				android/pixit-avdtp.txt \
 				android/pts-rfcomm.txt \
 				android/pts-spp.txt \
 				android/pts-l2cap.txt \
@@ -339,4 +317,5 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pts-sm.txt \
 				android/pts-hogp.txt \
 				android/pts-scpp.txt \
-				android/pts-dis.txt
+				android/pts-dis.txt \
+				android/pts-avdtp.txt

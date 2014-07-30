@@ -52,14 +52,14 @@
 
 #define TEST_CASE_BREDR(text, ...) { \
 		HCIEMU_TYPE_BREDR, \
-		"[BR/EDR] "text, \
+		text, \
 		sizeof((struct step[]) {__VA_ARGS__}) / sizeof(struct step), \
 		(struct step[]) {__VA_ARGS__}, \
 	}
 
 #define TEST_CASE_BREDRLE(text, ...) { \
 		HCIEMU_TYPE_BREDRLE, \
-		"[DUAL] "text, \
+		text, \
 		sizeof((struct step[]) {__VA_ARGS__}) / sizeof(struct step), \
 		(struct step[]) {__VA_ARGS__}, \
 	}
@@ -76,9 +76,24 @@
 		.set_data = data_set, \
 	}
 
+#define ACTION(status, act_fun, data_set) { \
+		.action_status = status, \
+		.action = act_fun, \
+		.set_data = data_set, \
+	}
+
+#define CALLBACK(cb) { \
+		.callback = cb, \
+	}
+
 #define CALLBACK_STATE(cb, cb_res) { \
 		.callback = cb, \
 		.callback_result.state = cb_res, \
+	}
+
+#define CALLBACK_STATUS(cb, cb_res) { \
+		.callback = cb, \
+		.callback_result.status = cb_res, \
 	}
 
 #define CALLBACK_ADAPTER_PROPS(props, prop_cnt) { \
@@ -91,6 +106,18 @@
 		.callback = cb, \
 		.callback_result.properties = props, \
 		.callback_result.num_properties = prop_cnt, \
+	}
+
+#define CALLBACK_HH_MODE(cb, cb_res, cb_mode) { \
+		.callback = cb, \
+		.callback_result.status = cb_res, \
+		.callback_result.mode = cb_mode, \
+	}
+
+#define CALLBACK_HHREPORT(cb, cb_res, cb_rep_size) { \
+		.callback = cb, \
+		.callback_result.status = cb_res, \
+		.callback_result.report_size = cb_rep_size, \
 	}
 
 #define CALLBACK_DEVICE_PROPS(props, prop_cnt) \
@@ -210,14 +237,32 @@ struct bt_action_data {
 	bt_bdaddr_t *addr;
 
 	/* Remote props action arguments */
-	int prop_type;
-	bt_property_t *prop;
+	const int prop_type;
+	const bt_property_t *prop;
 
 	/* Bonding requests parameters */
 	bt_pin_code_t *pin;
-	uint8_t pin_len;
-	uint8_t ssp_variant;
-	bool accept;
+	const uint8_t pin_len;
+	const uint8_t ssp_variant;
+	const bool accept;
+
+	/* Socket HAL specific params */
+	const btsock_type_t sock_type;
+	const int channel;
+	const uint8_t *service_uuid;
+	const char *service_name;
+	const int flags;
+	int *fd;
+
+	/* HidHost params */
+	const int report_size;
+};
+
+/* bthost's l2cap server setup parameters */
+struct emu_set_l2cap_data {
+	const uint16_t psm;
+	const bthost_l2cap_connect_cb func;
+	void *user_data;
 };
 
 /*
@@ -232,6 +277,9 @@ struct bt_callback_data {
 	bt_property_t *properties;
 
 	bt_ssp_variant_t pairing_variant;
+
+	bthh_protocol_mode_t mode;
+	int report_size;
 };
 
 /*
@@ -250,9 +298,9 @@ struct step {
 };
 
 struct test_case {
-	uint8_t emu_type;
-	char *title;
-	uint16_t step_num;
+	const uint8_t emu_type;
+	const char *title;
+	const uint16_t step_num;
 	const struct step const *step;
 };
 
@@ -266,10 +314,15 @@ void remove_hidhost_tests(void);
 struct queue *get_gatt_tests(void);
 void remove_gatt_tests(void);
 
+/* Generic tester API */
+void schedule_action_verification(struct step *step);
+
 /* Emulator actions */
 void emu_setup_powered_remote_action(void);
 void emu_set_pin_code_action(void);
 void emu_set_ssp_mode_action(void);
+void emu_add_l2cap_server_action(void);
+void emu_add_rfcomm_server_action(void);
 
 /* Actions */
 void dummy_action(void);
