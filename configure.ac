@@ -274,4 +274,4 @@ fi
 AC_DEFINE_UNQUOTED(ANDROID_STORAGEDIR, "${storagedir}/android",
 			[Directory for the Android daemon storage files])
 
-AC_OUTPUT(Makefile src/bluetoothd.8 lib/bluez.pc)
+AC_OUTPUT(Makefile src/bluetoothd.8 lib/bluez.pc doc/Makefile)

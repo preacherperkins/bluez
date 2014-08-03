@@ -1,3 +1,4 @@
+SUBDIRS = doc
 
 AM_MAKEFLAGS = --no-print-directory
 

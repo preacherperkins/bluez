@@ -1,0 +1,59 @@
+<interface name="org.bluez.ARCServer1">
+
+  <method name="EmitEvent">
+    <arg name="Params" type="s" direction="in"/>
+  </method>
+
+  <method name="SubmitResult">
+    <!-- Submit the result of a method call to the caller.
+	 @Recipient - the caller
+	 @Result - the result to send the caller (a Json blob)
+    -->
+    <arg name="Recipient" type="o" direction="in"/>
+    <arg name="Result"    type="s" direction="in"/>
+  </method>
+
+  <method name="EnableAdvertising">
+    <!-- EnableAdvertising - Enable/Disable Advertising of the
+         BTLE-characteristics. Advertising must be disabled before
+         StartDiscovery (on the org.bluez.Adapter1 interface) can be
+         called. And it must be enabled to make ourselves visible for clients.
+
+         @Enable - true to (attempt to) enable advertising; false to to the
+         opposite
+    -->
+    <arg name="Enable" type="b" direction="in"/>
+  </method>
+
+
+  <signal name="MethodCalled">
+    <!-- MethodCalled - Signal emitted when some client called a method. After
+	 completion of the method / error, 'SubmitResult' is called.
+
+	@Caller - object-path of the caller of the method
+	@Params - Json-blob with the parameters for the call
+    -->
+    <arg name="Caller" type="o" direction="in"/>
+    <arg name="Params" type="s" direction="in"/>
+  </signal>
+
+  <!-- the DeviceName for this server -->
+  <property name="DeviceName" type="s" access="readwrite"></property>
+
+  <!-- the JID for this server -->
+  <property name="JID" type="s" access="readwrite"></property>
+
+  <!-- The magic byte -->
+  <property name="Magic" type="y" access="readwrite"></property>
+
+
+</interface>
+
+<interface name="org.bluez.ARCProxy1">
+
+  <property name="Request" type="s" access="readwrite"></property>
+  <property name="Result"  type="s" access="read"></property>
+  <property name="Event"   type="s" access="read"></property>
+  <property name="Target"  type="s" access="read"></property>
+
+</interface>

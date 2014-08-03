@@ -1,0 +1,9 @@
+  <interface name="org.bluez.GattManager1">
+    <method name="RegisterService">
+      <arg name="service" type="o" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+    </method>
+    <method name="UnregisterService">
+      <arg name="service" type="o" direction="in"/>
+    </method>
+  </interface>
