@@ -359,9 +359,13 @@ EXTRA_DIST += tools/bdaddr.1
 endif
 
 if READLINE
-noinst_PROGRAMS += attrib/gatttool \
+noinst_PROGRAMS +=  \
 			tools/obex-client-tool tools/obex-server-tool \
 			tools/bluetooth-player tools/obexctl
+
+if TOOLS
+bin_PROGRAMS += attrib/gatttool
+endif
 
 attrib_gatttool_SOURCES = attrib/gatttool.c attrib/att.c attrib/gatt.c \
 				attrib/gattrib.c btio/btio.c \
