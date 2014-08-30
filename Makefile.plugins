@@ -126,3 +126,6 @@ builtin_sources += profiles/arc/arc.c \
 		profiles/arc/arc.h \
 		profiles/arc/arc-proxy.c \
 		profiles/arc/arc-server.c
+
+builtin_modules += aui
+builtin_sources += profiles/aui/aui.c
