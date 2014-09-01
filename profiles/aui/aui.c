@@ -1,6 +1,6 @@
-/*
+/*-*- mode: c; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
 *
-*  Author: Dave S. Desrochers <dave.desrochers@aether.com
+*  Author: Dave S. Desrochers <dave.desrochers@aether.com>
 *
 * Copyright (c) 2014 Morse Project. All rights reserved.
 *
@@ -37,12 +37,10 @@
 #include "src/attrib-server.h"
 #include "attrib/gatt-service.h"
 #include "src/log.h"
+#include "src/service.h"
 
-
-#define AUI_SERVICE_UUID "cf0244d6-5081-4e0a-8236-b486a3985162"
-#define AUI_RCV_UUID     "409497e8-c42d-4870-aa4f-fe4e5b516410"
-#define AUI_SEND_UUID    "9e847894-d33c-4271-a3a5-bf7849fc0e03"
-#define AUI_DEVID_UUID   "a8bb3a1f-0afa-463a-83ca-a10054087787"
+#include "aui.h"
+#include "aui-advertise.h"
 
 static uint8_t aui_process_cmd(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
@@ -83,9 +81,9 @@ static gboolean register_aui_service(struct btd_adapter *adapter)
 	bt_uuid_t srv_uuid, rcv_uuid, devid_uuid, send_uuid;
 
 	bt_string_to_uuid(  &srv_uuid, AUI_SERVICE_UUID);
-        bt_string_to_uuid(  &rcv_uuid, AUI_RCV_UUID);
-        bt_string_to_uuid(&devid_uuid, AUI_DEVID_UUID);
-        bt_string_to_uuid( &send_uuid, AUI_SEND_UUID);
+	bt_string_to_uuid(  &rcv_uuid, AUI_RCV_UUID);
+	bt_string_to_uuid(&devid_uuid, AUI_DEVID_UUID);
+	bt_string_to_uuid( &send_uuid, AUI_SEND_UUID);
 
 	/* Aether User Interface service */
 	return gatt_service_add(adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
@@ -112,7 +110,7 @@ static gboolean register_aui_service(struct btd_adapter *adapter)
 			GATT_OPT_INVALID);
 }
 
-static int aui_server_init(struct btd_profile *p, struct btd_adapter *adapter)
+static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 {
 	const char *path = adapter_get_path(adapter);
 
@@ -123,21 +121,78 @@ static int aui_server_init(struct btd_profile *p, struct btd_adapter *adapter)
 		return -EIO;
 	}
 
+	if(aui_set_powered_blocking(adapter) < 0) {
+		error("Could not power on device id %d", btd_adapter_get_index(adapter));
+	}
+
+	if(aui_set_advertise_params(adapter) < 0) {
+		error("Could not set advertising parameter data");
+	}
+
+	if(aui_set_advertise_data(adapter) < 0) {
+		error("Could not set advertising data");
+	}
+
+	if(aui_set_scan_response_data(adapter, p->name) < 0) {
+		error("Could not set response data");
+	}
+
+	if(aui_set_advertise_enable(adapter, TRUE) < 0) {
+		error("Could not enable advertising");
+	}
+
 	return 0;
 }
 
-static void aui_server_remove(struct btd_profile *p, struct btd_adapter *adapter)
+static void aui_adapter_remove(struct btd_profile *p, struct btd_adapter *adapter)
 {
 	const char *path = adapter_get_path(adapter);
 
 	DBG("DSD: path %s", path);
+
+	/* Currently this will always fail. This is because
+	 * the device gets disabled before this callback is called
+	 * Need to find another way to disable advertising, but having
+	 * this here for now makes for a good reminder
+	 */
+	if(aui_set_advertise_enable(adapter, FALSE) < 0) {
+		error("Could not disable advertising");
+	}
+}
+
+static int aui_device_probe(struct btd_service *service)
+{
+	/*
+	 * TODO: Check to see if this is the first device before
+	 * attempting to turn off advertising
+	 */
+	if(aui_set_advertise_enable(device_get_adapter(btd_service_get_device(service)), FALSE) < 0) {
+		error("Could not disable advertising");
+	}
+
+	return 0;
+}
+
+static void aui_device_remove(struct btd_service *service)
+{
+	/*
+	 * TODO: Check to make sure this is the last device
+	 * before re-enabling advertising
+	 */
+	if(aui_set_advertise_enable(device_get_adapter(btd_service_get_device(service)), TRUE) < 0) {
+		error("Could not enable advertising");
+	}
 }
 
 static struct btd_profile aui_profile = {
 	.name		= "Aether UI Profile",
-	.remote_uuid    = AUI_SERVICE_UUID,
-	.adapter_probe	= aui_server_init,
-	.adapter_remove	= aui_server_remove,
+	.remote_uuid	= AUI_SERVICE_UUID,
+
+	.adapter_probe	= aui_adapter_init,
+	.adapter_remove	= aui_adapter_remove,
+
+	.device_probe	= aui_device_probe,
+	.device_remove	= aui_device_remove,
 };
 
 static int aui_init(void)
