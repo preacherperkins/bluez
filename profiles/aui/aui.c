@@ -18,6 +18,7 @@
 #endif
 
 #include <glib.h>
+#include <gdbus/gdbus.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -38,19 +39,92 @@
 #include "attrib/gatt-service.h"
 #include "src/log.h"
 #include "src/service.h"
+#include "src/dbus-common.h"
 
 #include "aui.h"
 #include "aui-advertise.h"
 
+enum {
+	NOP                = 255,
+	VOL_UP             = 10,
+	VOL_DOWN           = 11,
+	NEXT_TRACK         = 12,
+	PREV_TRACK         = 13,
+	NEXT_SET           = 14,
+	PREV_SET           = 15,
+	PLAY_PAUSE_TOGGLE  = 16
+};
+
+struct Self {
+	uint8_t aui_cmd;
+	struct btd_adapter *adapter;
+} *self;
+
+static gboolean aui_property_cmd(const GDBusPropertyTable *property,
+	DBusMessageIter *iter, void *data)
+{
+	struct Self *self = (struct Self*)data;
+
+	DBG("DSD: %s: New Cmd: %d", __FUNCTION__, self->aui_cmd);
+
+	dbus_message_iter_append_basic(iter, DBUS_TYPE_BYTE, &(self->aui_cmd));
+
+	return TRUE;
+}
+
+static DBusMessage *aui_register_watcher(DBusConnection *conn, DBusMessage *msg, void *data)
+{
+	DBG("DSD: %s", __FUNCTION__);
+
+	return dbus_message_new_method_return(msg);
+}
+
+static DBusMessage *aui_unregister_watcher(DBusConnection *conn, DBusMessage *msg,
+								void *data)
+{
+	DBG("DSD: %s", __FUNCTION__);
+
+	return dbus_message_new_method_return(msg);
+}
+
+static const GDBusPropertyTable aui_manager_properties[] = {
+	{ "RemoteCmd", "y", aui_property_cmd },
+	{ }
+};
+
+static const GDBusMethodTable aui_manager_methods[] = {
+	{
+		GDBUS_METHOD("RegisterWatcher",
+				GDBUS_ARGS({ "agent", "o" }),
+				NULL,
+				aui_register_watcher)
+	},
+	{
+		GDBUS_METHOD("UnregisterWatcher",
+				GDBUS_ARGS({ "agent", "o" }),
+				NULL,
+				aui_unregister_watcher)
+	},
+	{ }
+};
+
 static uint8_t aui_process_cmd(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
+	struct Self *self = (struct Self*)user_data;
+
 	DBG("DSD:  Processing command: 0x%x", *a->data);
+
+	self->aui_cmd = *a->data;
+
+	g_dbus_emit_property_changed(btd_get_dbus_connection(),
+			adapter_get_path(self->adapter), AUI_MANAGER_INTERFACE, "RemoteCmd" );
+
 	return 0;
 }
 
 static uint8_t aui_get_device_id(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
-	struct btd_adapter *adapter = user_data;
+        struct Self *self = user_data;
 	uint8_t hostname[HOST_NAME_MAX + 1];
 
 	if(-1 == gethostname((char *)hostname, HOST_NAME_MAX)) {
@@ -59,7 +133,7 @@ static uint8_t aui_get_device_id(struct attribute *a, struct btd_device *device,
 
 	DBG("DSD:  Returning hostname: '%s'", hostname);
 
-	attrib_db_update(adapter, a->handle, NULL, hostname, strlen((const char *)hostname), NULL);
+	attrib_db_update(self->adapter, a->handle, NULL, hostname, strlen((const char *)hostname), NULL);
 
 	return 0;
 }
@@ -76,7 +150,7 @@ static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *
 	return 0;
 }
 
-static gboolean register_aui_service(struct btd_adapter *adapter)
+static gboolean register_aui_service(struct Self *self)
 {
 	bt_uuid_t srv_uuid, rcv_uuid, devid_uuid, send_uuid;
 
@@ -86,41 +160,32 @@ static gboolean register_aui_service(struct btd_adapter *adapter)
 	bt_string_to_uuid( &send_uuid, AUI_SEND_UUID);
 
 	/* Aether User Interface service */
-	return gatt_service_add(adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
+	return gatt_service_add(self->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
 
 			/* Commands From Remote */
 			GATT_OPT_CHR_UUID, &rcv_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_WRITE,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
-			aui_process_cmd, adapter,
+			aui_process_cmd, self,
 
 			/* Device ID */
 			GATT_OPT_CHR_UUID, &devid_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			aui_get_device_id, adapter,
+			aui_get_device_id, self,
 
 			/* Commands To Remote */
 			GATT_OPT_CHR_UUID, &send_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ |
 						GATT_CHR_PROP_NOTIFY,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			aui_send_event_to_remote, adapter,
+			aui_send_event_to_remote, self,
 
 			GATT_OPT_INVALID);
 }
 
-static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
+static void aui_configure_advertising(struct btd_profile *p, struct btd_adapter *adapter)
 {
-	const char *path = adapter_get_path(adapter);
-
-	DBG("DSD: path %s", path);
-
-	if (!register_aui_service(adapter)) {
-		error("AUI could not be registered");
-		return -EIO;
-	}
-
 	if(aui_set_powered_blocking(adapter) < 0) {
 		error("Could not power on device id %d", btd_adapter_get_index(adapter));
 	}
@@ -140,6 +205,40 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 	if(aui_set_advertise_enable(adapter, TRUE) < 0) {
 		error("Could not enable advertising");
 	}
+}
+
+static void aui_destroy_adapter(gpointer user_data)
+{
+	DBG("DSD: %s",__FUNCTION__);
+}
+
+static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
+{
+	const char *path = adapter_get_path(adapter);
+
+	DBG("DSD: path %s", path);
+
+	self = g_new0(struct Self, 1);
+	self->adapter = adapter;
+	self->aui_cmd = NOP;
+
+	if (!register_aui_service(self)) {
+		error("AUI could not be registered");
+		return -EIO;
+	}
+
+	aui_configure_advertising(p, adapter);
+
+	if (!g_dbus_register_interface(btd_get_dbus_connection(),
+				adapter_get_path(adapter),
+				AUI_MANAGER_INTERFACE,
+				aui_manager_methods,          /* Methods    */
+				NULL,                         /* Signals    */
+				aui_manager_properties,       /* Properties */
+				self,                         /* User data  */
+				aui_destroy_adapter)) {
+		error("D-Bus failed to register %s interface", AUI_MANAGER_INTERFACE);
+	}
 
 	return 0;
 }
@@ -158,30 +257,12 @@ static void aui_adapter_remove(struct btd_profile *p, struct btd_adapter *adapte
 	if(aui_set_advertise_enable(adapter, FALSE) < 0) {
 		error("Could not disable advertising");
 	}
-}
 
-static int aui_device_probe(struct btd_service *service)
-{
-	/*
-	 * TODO: Check to see if this is the first device before
-	 * attempting to turn off advertising
-	 */
-	if(aui_set_advertise_enable(device_get_adapter(btd_service_get_device(service)), FALSE) < 0) {
-		error("Could not disable advertising");
-	}
+	g_free(self);
 
-	return 0;
-}
-
-static void aui_device_remove(struct btd_service *service)
-{
-	/*
-	 * TODO: Check to make sure this is the last device
-	 * before re-enabling advertising
-	 */
-	if(aui_set_advertise_enable(device_get_adapter(btd_service_get_device(service)), TRUE) < 0) {
-		error("Could not enable advertising");
-	}
+	g_dbus_unregister_interface(btd_get_dbus_connection(),
+			adapter_get_path(adapter),
+			AUI_MANAGER_INTERFACE);
 }
 
 static struct btd_profile aui_profile = {
@@ -190,9 +271,6 @@ static struct btd_profile aui_profile = {
 
 	.adapter_probe	= aui_adapter_init,
 	.adapter_remove	= aui_adapter_remove,
-
-	.device_probe	= aui_device_probe,
-	.device_remove	= aui_device_remove,
 };
 
 static int aui_init(void)
@@ -202,7 +280,7 @@ static int aui_init(void)
 
 static void aui_exit(void)
 {
-	btd_profile_register(&aui_profile);
+	btd_profile_unregister(&aui_profile);
 }
 
 BLUETOOTH_PLUGIN_DEFINE(aui, VERSION, BLUETOOTH_PLUGIN_PRIORITY_LOW,

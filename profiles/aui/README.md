@@ -50,7 +50,44 @@ This notification is triggered by a DBUS client.
 
 ## DBus-interfaces
 
-TODO...
+Besides the normal bluez API, there exists a property called "RemoteCmd" in the
+adapter object path (usually `/org/bluez/hci0`). This property is part of a new
+interface called
+
+_org.bluez.AuiManager1_
+
+RemoteCmd has a type "y" (unsigned 8-bit integer).  When a client updates the
+AUI_RCV_UUID value, bluez emits a PropertyChanged signal with the new value.
+
+This value should match the following enumeration:
+
+```c
+enum {
+	NOP                = 255,
+	VOL_UP             = 10,
+	VOL_DOWN           = 11,
+	NEXT_TRACK         = 12,
+	PREV_TRACK         = 13,
+	NEXT_SET           = 14,
+	PREV_SET           = 15,
+	PLAY_PAUSE_TOGGLE  = 16
+};
+```
+
+And here's a sample output when using `dbus-monitor --system`:
+
+```
+signal sender=:1.195 -> dest=(null destination) serial=11 path=/org/bluez/hci0; interface=org.freedesktop.DBus.Properties; member=PropertiesChanged
+   string "org.bluez.AuiManager1"
+   array [
+      dict entry(
+         string "RemoteCmd"
+         variant             byte 17
+      )
+   ]
+   array [
+   ]
+```
 
 ## HCI Interface Extension
 
