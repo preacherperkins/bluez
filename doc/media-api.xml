@@ -1,0 +1,48 @@
+<interface name="org.bluez.Media1">
+    <method name="RegisterEndpoint">
+        <arg name="endpoint" type="o" direction="in" />
+        <arg name="properties" type="a{sv}" direction="in" />
+    </method>
+    <method name="UnregisterEndpoint">
+        <arg name="endpoint" type="o" direction="in" />
+    </method>
+</interface>
+<interface name="org.bluez.MediaPlayer1">
+    <method name="Play"></method>
+    <method name="Pause"></method>
+    <method name="Stop"></method>
+    <method name="Next"></method>
+    <method name="Previous"></method>
+    <method name="FastForward"></method>
+    <method name="Rewind"></method>
+    <property name="Name" type="s" access="read"></property>
+    <property name="Type" type="s" access="read"></property>
+    <property name="Subtype" type="s" access="read"></property>
+    <property name="Position" type="u" access="read"></property>
+    <property name="Status" type="s" access="read"></property>
+    <property name="Equalizer" type="s" access="readwrite"></property>
+    <property name="Repeat" type="s" access="readwrite"></property>
+    <property name="Shuffle" type="s" access="readwrite"></property>
+    <property name="Scan" type="s" access="readwrite"></property>
+    <property name="Track" type="a{sv}" access="read"></property>
+    <property name="Device" type="o" access="read"></property>
+    <property name="Browsable" type="b" access="read"></property>
+    <property name="Searchable" type="b" access="read"></property>
+    <property name="Playlist" type="o" access="read"></property>
+</interface>
+<interface name="org.bluez.MediaFolder1">
+    <method name="Search">
+        <arg name="string" type="s" direction="in" />
+        <arg name="filter" type="a{sv}" direction="in" />
+        <arg name="folder" type="o" direction="out" />
+    </method>
+    <method name="ListItems">
+        <arg name="filter" type="a{sv}" direction="in" />
+        <arg name="items" type="a{oa{sv}}" direction="out" />
+    </method>
+    <method name="ChangeFolder">
+        <arg name="folder" type="o" direction="in" />
+    </method>
+    <property name="Name" type="s" access="read"></property>
+    <property name="NumberOfItems" type="u" access="read"></property>
+</interface>

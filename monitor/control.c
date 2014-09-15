@@ -2,22 +2,22 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2011-2012  Intel Corporation
- *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2011-2014  Intel Corporation
+ *  Copyright (C) 2002-2010  Marcel Holtmann <marcel@holtmann.org>
  *
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
  *
- *  This program is distributed in the hope that it will be useful,
+ *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
@@ -40,13 +40,16 @@
 #include "lib/hci.h"
 #include "lib/mgmt.h"
 
+#include "src/shared/util.h"
+#include "src/shared/btsnoop.h"
 #include "mainloop.h"
 #include "display.h"
 #include "packet.h"
-#include "btsnoop.h"
 #include "hcidump.h"
+#include "ellisys.h"
 #include "control.h"
 
+static struct btsnoop *btsnoop_file = NULL;
 static bool hcidump_fallback = false;
 
 #define MAX_PACKET_SIZE		(1486 + 4)
@@ -81,6 +84,20 @@ static void mgmt_index_removed(uint16_t len, const void *buf)
 	packet_hexdump(buf, len);
 }
 
+static void mgmt_unconf_index_added(uint16_t len, const void *buf)
+{
+	printf("@ Unconfigured Index Added\n");
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_unconf_index_removed(uint16_t len, const void *buf)
+{
+	printf("@ Unconfigured Index Removed\n");
+
+	packet_hexdump(buf, len);
+}
+
 static void mgmt_controller_error(uint16_t len, const void *buf)
 {
 	const struct mgmt_ev_controller_error *ev = buf;
@@ -102,10 +119,43 @@ static void mgmt_controller_error(uint16_t len, const void *buf)
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
 #endif
 
+static const char *config_options_str[] = {
+	"external", "public-address",
+};
+
+static void mgmt_new_config_options(uint16_t len, const void *buf)
+{
+	uint32_t options;
+	unsigned int i;
+
+	if (len < 4) {
+		printf("* Malformed New Configuration Options control\n");
+		return;
+	}
+
+	options = get_le32(buf);
+
+	printf("@ New Configuration Options: 0x%4.4x\n", options);
+
+	if (options) {
+		printf("%-12c", ' ');
+		for (i = 0; i < NELEM(config_options_str); i++) {
+			if (options & (1 << i))
+				printf("%s ", config_options_str[i]);
+		}
+		printf("\n");
+	}
+
+	buf += 4;
+	len -= 4;
+
+	packet_hexdump(buf, len);
+}
+
 static const char *settings_str[] = {
 	"powered", "connectable", "fast-connectable", "discoverable",
-	"pairable", "link-security", "ssp", "br/edr", "hs", "le",
-	"advertising",
+	"bondable", "link-security", "ssp", "br/edr", "hs", "le",
+	"advertising", "secure-conn", "debug-keys", "privacy",
 };
 
 static void mgmt_new_settings(uint16_t len, const void *buf)
@@ -118,16 +168,18 @@ static void mgmt_new_settings(uint16_t len, const void *buf)
 		return;
 	}
 
-	settings = bt_get_le32(buf);
+	settings = get_le32(buf);
 
 	printf("@ New Settings: 0x%4.4x\n", settings);
 
-	printf("%-12c", ' ');
-	for (i = 0; i < NELEM(settings_str); i++) {
-		if (settings & (1 << i))
-			printf("%s ", settings_str[i]);
+	if (settings) {
+		printf("%-12c", ' ');
+		for (i = 0; i < NELEM(settings_str); i++) {
+			if (settings & (1 << i))
+				printf("%s ", settings_str[i]);
+		}
+		printf("\n");
 	}
-	printf("\n");
 
 	buf += 4;
 	len -= 4;
@@ -204,7 +256,8 @@ static void mgmt_new_long_term_key(uint16_t len, const void *buf)
 
 	ba2str(&ev->key.addr.bdaddr, str);
 
-	printf("@ New Long Term Key: %s (%d)\n", str, ev->key.addr.type);
+	printf("@ New Long Term Key: %s (%d) %s\n", str, ev->key.addr.type,
+					ev->key.master ? "Master" : "Slave");
 
 	buf += sizeof(*ev);
 	len -= sizeof(*ev);
@@ -223,7 +276,7 @@ static void mgmt_device_connected(uint16_t len, const void *buf)
 		return;
 	}
 
-	flags = btohl(ev->flags);
+	flags = le32_to_cpu(ev->flags);
 	ba2str(&ev->addr.bdaddr, str);
 
 	printf("@ Device Connected: %s (%d) flags 0x%4.4x\n",
@@ -341,7 +394,7 @@ static void mgmt_user_passkey_request(uint16_t len, const void *buf)
 
 	ba2str(&ev->addr.bdaddr, str);
 
-	printf("@ PIN User Passkey Request: %s (%d)\n", str, ev->addr.type);
+	printf("@ User Passkey Request: %s (%d)\n", str, ev->addr.type);
 
 	buf += sizeof(*ev);
 	len -= sizeof(*ev);
@@ -381,7 +434,7 @@ static void mgmt_device_found(uint16_t len, const void *buf)
 		return;
 	}
 
-	flags = btohl(ev->flags);
+	flags = le32_to_cpu(ev->flags);
 	ba2str(&ev->addr.bdaddr, str);
 
 	printf("@ Device Found: %s (%d) rssi %d flags 0x%4.4x\n",
@@ -483,10 +536,119 @@ static void mgmt_passkey_notify(uint16_t len, const void *buf)
 
 	ba2str(&ev->addr.bdaddr, str);
 
-	passkey = btohl(ev->passkey);
+	passkey = le32_to_cpu(ev->passkey);
 
 	printf("@ Passkey Notify: %s (%d) passkey %06u entered %u\n",
 				str, ev->addr.type, passkey, ev->entered);
+
+	buf += sizeof(*ev);
+	len -= sizeof(*ev);
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_new_irk(uint16_t len, const void *buf)
+{
+	const struct mgmt_ev_new_irk *ev = buf;
+	char addr[18], rpa[18];
+
+	if (len < sizeof(*ev)) {
+		printf("* Malformed New IRK control\n");
+		return;
+	}
+
+	ba2str(&ev->rpa, rpa);
+	ba2str(&ev->key.addr.bdaddr, addr);
+
+	printf("@ New IRK: %s (%d) %s\n", addr, ev->key.addr.type, rpa);
+
+	buf += sizeof(*ev);
+	len -= sizeof(*ev);
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_new_csrk(uint16_t len, const void *buf)
+{
+	const struct mgmt_ev_new_csrk *ev = buf;
+	char addr[18];
+
+	if (len < sizeof(*ev)) {
+		printf("* Malformed New CSRK control\n");
+		return;
+	}
+
+	ba2str(&ev->key.addr.bdaddr, addr);
+
+	printf("@ New CSRK: %s (%d) %s\n", addr, ev->key.addr.type,
+					ev->key.master ? "Master" : "Slave");
+
+	buf += sizeof(*ev);
+	len -= sizeof(*ev);
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_device_added(uint16_t len, const void *buf)
+{
+	const struct mgmt_ev_device_added *ev = buf;
+	char str[18];
+
+	if (len < sizeof(*ev)) {
+		printf("* Malformed Device Added control\n");
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, str);
+
+	printf("@ Device Added: %s (%d) %d\n", str, ev->addr.type, ev->action);
+
+	buf += sizeof(*ev);
+	len -= sizeof(*ev);
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_device_removed(uint16_t len, const void *buf)
+{
+	const struct mgmt_ev_device_removed *ev = buf;
+	char str[18];
+
+	if (len < sizeof(*ev)) {
+		printf("* Malformed Device Removed control\n");
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, str);
+
+	printf("@ Device Removed: %s (%d)\n", str, ev->addr.type);
+
+	buf += sizeof(*ev);
+	len -= sizeof(*ev);
+
+	packet_hexdump(buf, len);
+}
+
+static void mgmt_new_conn_param(uint16_t len, const void *buf)
+{
+	const struct mgmt_ev_new_conn_param *ev = buf;
+	char addr[18];
+	uint16_t min, max, latency, timeout;
+
+	if (len < sizeof(*ev)) {
+		printf("* Malformed New Connection Parameter control\n");
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, addr);
+	min = le16_to_cpu(ev->min_interval);
+	max = le16_to_cpu(ev->max_interval);
+	latency = le16_to_cpu(ev->latency);
+	timeout = le16_to_cpu(ev->timeout);
+
+	printf("@ New Conn Param: %s (%d) hint %d min 0x%4.4x max 0x%4.4x "
+		"latency 0x%4.4x timeout 0x%4.4x\n", addr, ev->addr.type,
+		ev->store_hint, min, max, latency, timeout);
 
 	buf += sizeof(*ev);
 	len -= sizeof(*ev);
@@ -560,6 +722,30 @@ void control_message(uint16_t opcode, const void *data, uint16_t size)
 	case MGMT_EV_PASSKEY_NOTIFY:
 		mgmt_passkey_notify(size, data);
 		break;
+	case MGMT_EV_NEW_IRK:
+		mgmt_new_irk(size, data);
+		break;
+	case MGMT_EV_NEW_CSRK:
+		mgmt_new_csrk(size, data);
+		break;
+	case MGMT_EV_DEVICE_ADDED:
+		mgmt_device_added(size, data);
+		break;
+	case MGMT_EV_DEVICE_REMOVED:
+		mgmt_device_removed(size, data);
+		break;
+	case MGMT_EV_NEW_CONN_PARAM:
+		mgmt_new_conn_param(size, data);
+		break;
+	case MGMT_EV_UNCONF_INDEX_ADDED:
+		mgmt_unconf_index_added(size, data);
+		break;
+	case MGMT_EV_UNCONF_INDEX_REMOVED:
+		mgmt_unconf_index_removed(size, data);
+		break;
+	case MGMT_EV_NEW_CONFIG_OPTIONS:
+		mgmt_new_config_options(size, data);
+		break;
 	default:
 		printf("* Unknown control (code %d len %d)\n", opcode, size);
 		packet_hexdump(data, size);
@@ -616,17 +802,20 @@ static void data_callback(int fd, uint32_t events, void *user_data)
 			}
 		}
 
-		opcode = btohs(hdr.opcode);
-		index  = btohs(hdr.index);
-		pktlen = btohs(hdr.len);
+		opcode = le16_to_cpu(hdr.opcode);
+		index  = le16_to_cpu(hdr.index);
+		pktlen = le16_to_cpu(hdr.len);
 
 		switch (data->channel) {
 		case HCI_CHANNEL_CONTROL:
 			packet_control(tv, index, opcode, data->buf, pktlen);
 			break;
 		case HCI_CHANNEL_MONITOR:
+			btsnoop_write_hci(btsnoop_file, tv, index, opcode,
+							data->buf, pktlen);
+			ellisys_inject_hci(tv, index, opcode,
+							data->buf, pktlen);
 			packet_monitor(tv, index, opcode, data->buf, pktlen);
-			btsnoop_write_hci(tv, index, opcode, data->buf, pktlen);
 			break;
 		}
 	}
@@ -710,11 +899,11 @@ static void client_callback(int fd, uint32_t events, void *user_data)
 
 	if (data->offset > MGMT_HDR_SIZE) {
 		struct mgmt_hdr *hdr = (struct mgmt_hdr *) data->buf;
-		uint16_t pktlen = btohs(hdr->len);
+		uint16_t pktlen = le16_to_cpu(hdr->len);
 
 		if (data->offset > pktlen + MGMT_HDR_SIZE) {
-			uint16_t opcode = btohs(hdr->opcode);
-			uint16_t index = btohs(hdr->index);
+			uint16_t opcode = le16_to_cpu(hdr->opcode);
+			uint16_t index = le16_to_cpu(hdr->index);
 
 			packet_monitor(NULL, index, opcode,
 					data->buf + MGMT_HDR_SIZE, pktlen);
@@ -807,9 +996,11 @@ void control_server(const char *path)
 	server_fd = fd;
 }
 
-void control_writer(const char *path)
+bool control_writer(const char *path)
 {
-	btsnoop_create(path, BTSNOOP_TYPE_EXTENDED_HCI);
+	btsnoop_file = btsnoop_create(path, BTSNOOP_TYPE_MONITOR);
+
+	return !!btsnoop_file;
 }
 
 void control_reader(const char *path)
@@ -819,17 +1010,20 @@ void control_reader(const char *path)
 	uint32_t type;
 	struct timeval tv;
 
-	if (btsnoop_open(path, &type) < 0)
+	btsnoop_file = btsnoop_open(path, BTSNOOP_FLAG_PKLG_SUPPORT);
+	if (!btsnoop_file)
 		return;
+
+	type = btsnoop_get_type(btsnoop_file);
 
 	switch (type) {
 	case BTSNOOP_TYPE_HCI:
 	case BTSNOOP_TYPE_UART:
-	case BTSNOOP_TYPE_EXTENDED_PHY:
+	case BTSNOOP_TYPE_SIMULATOR:
 		packet_del_filter(PACKET_FILTER_SHOW_INDEX);
 		break;
 
-	case BTSNOOP_TYPE_EXTENDED_HCI:
+	case BTSNOOP_TYPE_MONITOR:
 		packet_add_filter(PACKET_FILTER_SHOW_INDEX);
 		break;
 	}
@@ -839,24 +1033,28 @@ void control_reader(const char *path)
 	switch (type) {
 	case BTSNOOP_TYPE_HCI:
 	case BTSNOOP_TYPE_UART:
-	case BTSNOOP_TYPE_EXTENDED_HCI:
+	case BTSNOOP_TYPE_MONITOR:
 		while (1) {
 			uint16_t index, opcode;
 
-			if (btsnoop_read_hci(&tv, &index, &opcode,
-							buf, &pktlen) < 0)
+			if (!btsnoop_read_hci(btsnoop_file, &tv, &index,
+							&opcode, buf, &pktlen))
 				break;
 
+			if (opcode == 0xffff)
+				continue;
+
 			packet_monitor(&tv, index, opcode, buf, pktlen);
+			ellisys_inject_hci(&tv, index, opcode, buf, pktlen);
 		}
 		break;
 
-	case BTSNOOP_TYPE_EXTENDED_PHY:
+	case BTSNOOP_TYPE_SIMULATOR:
 		while (1) {
 			uint16_t frequency;
 
-			if (btsnoop_read_phy(&tv, &frequency,
-							buf, &pktlen) < 0)
+			if (!btsnoop_read_phy(btsnoop_file, &tv, &frequency,
+								buf, &pktlen))
 				break;
 
 			packet_simulator(&tv, frequency, buf, pktlen);
@@ -866,7 +1064,7 @@ void control_reader(const char *path)
 
 	close_pager();
 
-	btsnoop_close();
+	btsnoop_unref(btsnoop_file);
 }
 
 int control_tracing(void)

@@ -59,7 +59,6 @@ enum {
 /* Default options */
 static int  snap_len = SNAP_LEN;
 static int  mode = PARSE;
-static int  permcheck = 1;
 static char *dump_file = NULL;
 static char *pppdump_file = NULL;
 static char *audio_file = NULL;
@@ -252,15 +251,15 @@ static int process_frames(int dev, int sock, int fd, unsigned long flags)
 			if (flags & DUMP_BTSNOOP) {
 				uint64_t ts;
 				uint8_t pkt_type = ((uint8_t *) frm.data)[0];
-				dp->size = htonl(frm.data_len);
+				dp->size = htobe32(frm.data_len);
 				dp->len  = dp->size;
-				dp->flags = ntohl(frm.in & 0x01);
+				dp->flags = be32toh(frm.in & 0x01);
 				dp->drops = 0;
 				ts = (frm.ts.tv_sec - 946684800ll) * 1000000ll + frm.ts.tv_usec;
-				dp->ts = hton64(ts + 0x00E03AB44A676000ll);
+				dp->ts = htobe64(ts + 0x00E03AB44A676000ll);
 				if (pkt_type == HCI_COMMAND_PKT ||
 						pkt_type == HCI_EVENT_PKT)
-					dp->flags |= ntohl(0x02);
+					dp->flags |= be32toh(0x02);
 			} else {
 				dh->len = htobs(frm.data_len);
 				dh->in  = frm.in;
@@ -309,7 +308,7 @@ static void read_dump(int fd)
 		if (err < 0)
 			goto failed;
 		if (!err)
-			return;
+			goto done;
 
 		if (parser.flags & DUMP_PKTLOG) {
 			switch (ph.type) {
@@ -330,11 +329,11 @@ static void read_dump(int fd)
 				frm.in = 1;
 				break;
 			default:
-				lseek(fd, ntohl(ph.len) - 9, SEEK_CUR);
+				lseek(fd, be32toh(ph.len) - 9, SEEK_CUR);
 				continue;
 			}
 
-			frm.data_len = ntohl(ph.len) - 8;
+			frm.data_len = be32toh(ph.len) - 8;
 			err = read_n(fd, frm.data + 1, frm.data_len - 1);
 		} else if (parser.flags & DUMP_BTSNOOP) {
 			uint32_t opcode;
@@ -342,8 +341,8 @@ static void read_dump(int fd)
 
 			switch (btsnoop_type) {
 			case 1001:
-				if (ntohl(dp.flags) & 0x02) {
-					if (ntohl(dp.flags) & 0x01)
+				if (be32toh(dp.flags) & 0x02) {
+					if (be32toh(dp.flags) & 0x01)
 						pkt_type = HCI_EVENT_PKT;
 					else
 						pkt_type = HCI_COMMAND_PKT;
@@ -352,17 +351,17 @@ static void read_dump(int fd)
 
 				((uint8_t *) frm.data)[0] = pkt_type;
 
-				frm.data_len = ntohl(dp.len) + 1;
+				frm.data_len = be32toh(dp.len) + 1;
 				err = read_n(fd, frm.data + 1, frm.data_len - 1);
 				break;
 
 			case 1002:
-				frm.data_len = ntohl(dp.len);
+				frm.data_len = be32toh(dp.len);
 				err = read_n(fd, frm.data, frm.data_len);
 				break;
 
 			case 2001:
-				opcode = ntohl(dp.flags) & 0xffff;
+				opcode = be32toh(dp.flags) & 0xffff;
 
 				switch (opcode) {
 				case 2:
@@ -396,7 +395,7 @@ static void read_dump(int fd)
 
 				((uint8_t *) frm.data)[0] = pkt_type;
 
-				frm.data_len = ntohl(dp.len) + 1;
+				frm.data_len = be32toh(dp.len) + 1;
 				err = read_n(fd, frm.data + 1, frm.data_len - 1);
 			}
 		} else {
@@ -407,20 +406,20 @@ static void read_dump(int fd)
 		if (err < 0)
 			goto failed;
 		if (!err)
-			return;
+			goto done;
 
 		frm.ptr = frm.data;
 		frm.len = frm.data_len;
 
 		if (parser.flags & DUMP_PKTLOG) {
 			uint64_t ts;
-			ts = ntoh64(ph.ts);
+			ts = be64toh(ph.ts);
 			frm.ts.tv_sec = ts >> 32;
 			frm.ts.tv_usec = ts & 0xffffffff;
 		} else if (parser.flags & DUMP_BTSNOOP) {
 			uint64_t ts;
-			frm.in = ntohl(dp.flags) & 0x01;
-			ts = ntoh64(dp.ts) - 0x00E03AB44A676000ll;
+			frm.in = be32toh(dp.flags) & 0x01;
+			ts = be64toh(dp.ts) - 0x00E03AB44A676000ll;
 			frm.ts.tv_sec = (ts / 1000000ll) + 946684800ll;
 			frm.ts.tv_usec = ts % 1000000ll;
 		} else {
@@ -432,8 +431,13 @@ static void read_dump(int fd)
 		parse(&frm);
 	}
 
+done:
+	free(frm.data);
+	return;
+
 failed:
 	perror("Read failed");
+	free(frm.data);
 	exit(1);
 }
 
@@ -464,8 +468,8 @@ static int open_file(char *file, int mode, unsigned long flags)
 		if (!memcmp(hdr->id, btsnoop_id, sizeof(btsnoop_id))) {
 			parser.flags |= DUMP_BTSNOOP;
 
-			btsnoop_version = ntohl(hdr->version);
-			btsnoop_type = ntohl(hdr->type);
+			btsnoop_version = be32toh(hdr->version);
+			btsnoop_type = be32toh(hdr->type);
 
 			printf("btsnoop version: %d datalink type: %d\n",
 						btsnoop_version, btsnoop_type);
@@ -496,8 +500,8 @@ static int open_file(char *file, int mode, unsigned long flags)
 			btsnoop_type = 1002;
 
 			memcpy(hdr->id, btsnoop_id, sizeof(btsnoop_id));
-			hdr->version = htonl(btsnoop_version);
-			hdr->type = htonl(btsnoop_type);
+			hdr->version = htobe32(btsnoop_version);
+			hdr->type = htobe32(btsnoop_type);
 
 			printf("btsnoop version: %d datalink type: %d\n",
 						btsnoop_version, btsnoop_type);
@@ -522,31 +526,7 @@ static int open_socket(int dev, unsigned long flags)
 {
 	struct sockaddr_hci addr;
 	struct hci_filter flt;
-	struct hci_dev_info di;
-	int sk, dd, opt;
-
-	if (permcheck && dev != HCI_DEV_NONE) {
-		dd = hci_open_dev(dev);
-		if (dd < 0) {
-			perror("Can't open device");
-			return -1;
-		}
-
-		if (hci_devinfo(dev, &di) < 0) {
-			perror("Can't get device info");
-			return -1;
-		}
-
-		opt = hci_test_bit(HCI_RAW, &di.flags);
-		if (ioctl(dd, HCISETRAW, opt) < 0) {
-			if (errno == EACCES) {
-				perror("Can't access device");
-				return -1;
-			}
-		}
-
-		hci_close_dev(dd);
-	}
+	int sk, opt;
 
 	/* Create HCI socket */
 	sk = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
@@ -683,7 +663,6 @@ static struct option main_options[] = {
 	{ "pppdump",		1, 0, 'D' },
 	{ "audio",		1, 0, 'A' },
 	{ "novendor",		0, 0, 'Y' },
-	{ "nopermcheck",	0, 0, 'Z' },
 	{ "help",		0, 0, 'h' },
 	{ "version",		0, 0, 'v' },
 	{ 0 }
@@ -700,7 +679,7 @@ int main(int argc, char *argv[])
 	uint16_t obex_port;
 
 	while ((opt = getopt_long(argc, argv,
-				"i:l:p:m:w:r:taxXRC:H:O:P:S:D:A:YZhv",
+				"i:l:p:m:w:r:taxXRC:H:O:P:S:D:A:Yhv",
 				main_options, NULL)) != -1) {
 		switch(opt) {
 		case 'i':
@@ -786,10 +765,6 @@ int main(int argc, char *argv[])
 
 		case 'Y':
 			flags |= DUMP_NOVENDOR;
-			break;
-
-		case 'Z':
-			permcheck = 0;
 			break;
 
 		case 'v':

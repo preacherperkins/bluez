@@ -47,7 +47,7 @@ builtin_sources += profiles/audio/control.h profiles/audio/control.c \
 
 builtin_modules += network
 builtin_sources += profiles/network/manager.c \
-			profiles/network/common.h profiles/network/common.c \
+			profiles/network/bnep.h profiles/network/bnep.c \
 			profiles/network/server.h profiles/network/server.c \
 			profiles/network/connection.h \
 			profiles/network/connection.c
@@ -55,7 +55,9 @@ builtin_sources += profiles/network/manager.c \
 builtin_modules += input
 builtin_sources += profiles/input/manager.c \
 			profiles/input/server.h profiles/input/server.c \
-			profiles/input/device.h profiles/input/device.c
+			profiles/input/device.h profiles/input/device.c \
+			src/shared/uhid.h src/shared/uhid.c \
+			profiles/input/hidp_defs.h
 
 builtin_modules += hog
 builtin_sources += profiles/input/hog.c profiles/input/uhid_copy.h \
@@ -116,3 +118,17 @@ builtin_sources += profiles/arc/arc.c         \
 		   profiles/arc/arc-proxy.c   \
 		   profiles/arc/arc-server.c
 endif
+
+if SIXAXIS
+plugin_LTLIBRARIES += plugins/sixaxis.la
+plugins_sixaxis_la_SOURCES = plugins/sixaxis.c
+plugins_sixaxis_la_LDFLAGS = $(AM_LDFLAGS) -module -avoid-version \
+						-no-undefined @UDEV_LIBS@
+plugins_sixaxis_la_CFLAGS = $(AM_CFLAGS) -fvisibility=hidden @UDEV_CFLAGS@
+endif
+
+builtin_modules += arc
+builtin_sources += profiles/arc/arc.c \
+		profiles/arc/arc.h \
+		profiles/arc/arc-proxy.c \
+		profiles/arc/arc-server.c

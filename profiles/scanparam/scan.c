@@ -30,18 +30,17 @@
 #include <errno.h>
 
 #include "lib/uuid.h"
-#include "log.h"
-#include "plugin.h"
-#include "adapter.h"
-#include "device.h"
-#include "profile.h"
-#include "service.h"
+#include "src/log.h"
+#include "src/plugin.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/profile.h"
+#include "src/service.h"
+#include "src/shared/util.h"
 #include "attrib/att.h"
 #include "attrib/gattrib.h"
 #include "attrib/gatt.h"
-#include "attio.h"
-
-#define SCAN_PARAMETERS_UUID		"00001813-0000-1000-8000-00805f9b34fb"
+#include "src/attio.h"
 
 #define SCAN_INTERVAL_WIN_UUID		0x2A4F
 #define SCAN_REFRESH_UUID		0x2A31
@@ -66,8 +65,8 @@ static void write_scan_params(GAttrib *attrib, uint16_t handle)
 {
 	uint8_t value[4];
 
-	att_put_u16(SCAN_INTERVAL, &value[0]);
-	att_put_u16(SCAN_WINDOW, &value[2]);
+	put_le16(SCAN_INTERVAL, &value[0]);
+	put_le16(SCAN_WINDOW, &value[2]);
 
 	gatt_write_cmd(attrib, handle, value, sizeof(value), NULL, NULL);
 }
@@ -101,43 +100,33 @@ static void ccc_written_cb(guint8 status, const guint8 *pdu,
 				refresh_value_cb, scan, NULL);
 }
 
-static void discover_descriptor_cb(guint8 status, const guint8 *pdu,
-					guint16 len, gpointer user_data)
+static void discover_descriptor_cb(uint8_t status, GSList *descs,
+								void *user_data)
 {
 	struct scan *scan = user_data;
-	struct att_data_list *list;
-	uint8_t *ptr;
-	uint16_t uuid16, handle;
+	struct gatt_desc *desc;
 	uint8_t value[2];
-	uint8_t format;
 
-	list = dec_find_info_resp(pdu, len, &format);
-	if (list == NULL)
+	if (status != 0) {
+		error("Discover descriptors failed: %s", att_ecode2str(status));
 		return;
+	}
 
-	if (format != ATT_FIND_INFO_RESP_FMT_16BIT)
-		goto done;
+	/* There will be only one descriptor on list and it will be CCC */
+	desc = descs->data;
 
-	ptr = list->data[0];
-	handle = att_get_u16(ptr);
-	uuid16 = att_get_u16(&ptr[2]);
-
-	if (uuid16 != GATT_CLIENT_CHARAC_CFG_UUID)
-		goto done;
-
-	att_put_u16(GATT_CLIENT_CHARAC_CFG_NOTIF_BIT, value);
-	gatt_write_char(scan->attrib, handle, value, sizeof(value),
+	put_le16(GATT_CLIENT_CHARAC_CFG_NOTIF_BIT, value);
+	gatt_write_char(scan->attrib, desc->handle, value, sizeof(value),
 						ccc_written_cb, user_data);
-done:
-	att_data_list_free(list);
 }
 
-static void refresh_discovered_cb(GSList *chars, guint8 status,
-						gpointer user_data)
+static void refresh_discovered_cb(uint8_t status, GSList *chars,
+								void *user_data)
 {
 	struct scan *scan = user_data;
 	struct gatt_char *chr;
 	uint16_t start, end;
+	bt_uuid_t uuid;
 
 	if (status) {
 		error("Scan Refresh %s", att_ecode2str(status));
@@ -161,12 +150,13 @@ static void refresh_discovered_cb(GSList *chars, guint8 status,
 
 	scan->refresh_handle = chr->value_handle;
 
-	gatt_discover_char_desc(scan->attrib, start, end,
+	bt_uuid16_create(&uuid, GATT_CLIENT_CHARAC_CFG_UUID);
+
+	gatt_discover_desc(scan->attrib, start, end, &uuid,
 					discover_descriptor_cb, user_data);
 }
 
-static void iwin_discovered_cb(GSList *chars, guint8 status,
-						gpointer user_data)
+static void iwin_discovered_cb(uint8_t status, GSList *chars, void *user_data)
 {
 	struct scan *scan = user_data;
 	struct gatt_char *chr;

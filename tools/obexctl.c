@@ -431,14 +431,12 @@ static void set_default_session(GDBusProxy *proxy)
 
 	default_session = proxy;
 
-	if (proxy == NULL) {
+	if (!g_dbus_proxy_get_property(proxy, "Destination", &iter)) {
 		desc = g_strdup(PROMPT_ON);
 		goto done;
 	}
 
-	if (g_dbus_proxy_get_property(proxy, "Destination", &iter))
-		dbus_message_iter_get_basic(&iter, &desc);
-
+	dbus_message_iter_get_basic(&iter, &desc);
 	desc = g_strdup_printf(COLOR_BLUE "[%s]" COLOR_OFF "# ", desc);
 
 done:
@@ -595,6 +593,86 @@ static void cmd_cancel(int argc, char *argv[])
 	}
 
 	rl_printf("Attempting to cancel transfer %s\n",
+						g_dbus_proxy_get_path(proxy));
+}
+
+static void suspend_reply(DBusMessage *message, void *user_data)
+{
+	DBusError error;
+
+	dbus_error_init(&error);
+
+	if (dbus_set_error_from_message(&error, message) == TRUE) {
+		rl_printf("Failed to suspend: %s\n", error.name);
+		dbus_error_free(&error);
+		return;
+	}
+
+	rl_printf("Suspend successful\n");
+}
+
+static void cmd_suspend(int argc, char *argv[])
+{
+	GDBusProxy *proxy;
+
+	if (argc < 2) {
+		rl_printf("Missing transfer address argument\n");
+		return;
+	}
+
+	proxy = find_transfer(argv[1]);
+	if (!proxy) {
+		rl_printf("Transfer %s not available\n", argv[1]);
+		return;
+	}
+
+	if (g_dbus_proxy_method_call(proxy, "Suspend", NULL, suspend_reply,
+						NULL, NULL) == FALSE) {
+		rl_printf("Failed to suspend transfer\n");
+		return;
+	}
+
+	rl_printf("Attempting to suspend transfer %s\n",
+						g_dbus_proxy_get_path(proxy));
+}
+
+static void resume_reply(DBusMessage *message, void *user_data)
+{
+	DBusError error;
+
+	dbus_error_init(&error);
+
+	if (dbus_set_error_from_message(&error, message) == TRUE) {
+		rl_printf("Failed to resume: %s\n", error.name);
+		dbus_error_free(&error);
+		return;
+	}
+
+	rl_printf("Resume successful\n");
+}
+
+static void cmd_resume(int argc, char *argv[])
+{
+	GDBusProxy *proxy;
+
+	if (argc < 2) {
+		rl_printf("Missing transfer address argument\n");
+		return;
+	}
+
+	proxy = find_transfer(argv[1]);
+	if (!proxy) {
+		rl_printf("Transfer %s not available\n", argv[1]);
+		return;
+	}
+
+	if (g_dbus_proxy_method_call(proxy, "Resume", NULL, resume_reply,
+						NULL, NULL) == FALSE) {
+		rl_printf("Failed to resume transfer\n");
+		return;
+	}
+
+	rl_printf("Attempting to resume transfer %s\n",
 						g_dbus_proxy_get_path(proxy));
 }
 
@@ -1203,13 +1281,8 @@ static void list_messages_setup(DBusMessageIter *iter, void *user_data)
 	dbus_message_iter_close_container(iter, &dict);
 }
 
-static void pbap_ls(GDBusProxy *proxy, int argc, char *argv[])
+static void pbap_list(GDBusProxy *proxy, int argc, char *argv[])
 {
-	if (argc > 1) {
-		pbap_search(proxy, argc, argv);
-		return;
-	}
-
 	if (g_dbus_proxy_method_call(proxy, "List", list_setup, list_reply,
 						NULL, NULL) == FALSE) {
 		rl_printf("Failed to List\n");
@@ -1217,6 +1290,51 @@ static void pbap_ls(GDBusProxy *proxy, int argc, char *argv[])
 	}
 
 	rl_printf("Attempting to List\n");
+}
+
+static void get_size_reply(DBusMessage *message, void *user_data)
+{
+	GDBusProxy *proxy = user_data;
+	DBusError error;
+	DBusMessageIter iter;
+
+	dbus_error_init(&error);
+
+	if (dbus_set_error_from_message(&error, message) == TRUE) {
+		rl_printf("Failed to GetSize: %s\n", error.name);
+		dbus_error_free(&error);
+		return;
+	}
+
+	dbus_message_iter_init(message, &iter);
+
+	print_iter("\t", "Size", &iter);
+
+	pbap_list(proxy, 0, NULL);
+}
+
+static void pbap_get_size(GDBusProxy *proxy, int argc, char *argv[])
+{
+	if (g_dbus_proxy_method_call(proxy, "GetSize", NULL, get_size_reply,
+						proxy, NULL) == FALSE) {
+		rl_printf("Failed to GetSize\n");
+		return;
+	}
+
+	rl_printf("Attempting to GetSize\n");
+}
+
+static void pbap_ls(GDBusProxy *proxy, int argc, char *argv[])
+{
+	if (argc > 1) {
+		if (strcmp("-l", argv[1]))
+			pbap_search(proxy, argc, argv);
+		else
+			pbap_get_size(proxy, argc, argv);
+		return;
+	}
+
+	pbap_list(proxy, argc, argv);
 }
 
 static void map_ls_messages(GDBusProxy *proxy, int argc, char *argv[])
@@ -1858,9 +1976,11 @@ static const struct {
 	{ "select",       "<session>", cmd_select, "Select default session" },
 	{ "info",         "<object>", cmd_info, "Object information" },
 	{ "cancel",       "<transfer>", cmd_cancel, "Cancel transfer" },
+	{ "suspend",      "<transfer>", cmd_suspend, "Suspend transfer" },
+	{ "resume",       "<transfer>", cmd_resume, "Resume transfer" },
 	{ "send",         "<file>",   cmd_send, "Send file" },
 	{ "cd",           "<path>",   cmd_cd, "Change current folder" },
-	{ "ls",           NULL,       cmd_ls, "List current folder" },
+	{ "ls",           "<options>", cmd_ls, "List current folder" },
 	{ "cp",          "<source file> <destination file>",   cmd_cp,
 				"Copy source file to destination file" },
 	{ "mv",          "<source file> <destination file>",   cmd_mv,
@@ -1925,6 +2045,7 @@ static void rl_handler(char *input)
 	if (!strlen(input))
 		goto done;
 
+	g_strstrip(input);
 	add_history(input);
 
 	argv = g_strsplit(input, " ", -1);

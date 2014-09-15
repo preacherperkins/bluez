@@ -1006,6 +1006,8 @@ static gboolean process_changes(gpointer user_data)
 	if (data->removed != NULL)
 		emit_interfaces_removed(data);
 
+	data->process_id = 0;
+
 	return FALSE;
 }
 
@@ -1019,6 +1021,7 @@ static void generic_unregister(DBusConnection *connection, void *user_data)
 
 	if (data->process_id > 0) {
 		g_source_remove(data->process_id);
+		data->process_id = 0;
 		process_changes(data);
 	}
 
@@ -1250,6 +1253,8 @@ static struct generic_data *object_path_ref(DBusConnection *connection,
 
 	if (!dbus_connection_register_object_path(connection, path,
 						&generic_table, data)) {
+		dbus_connection_unref(data->conn);
+		g_free(data->path);
 		g_free(data->introspect);
 		g_free(data);
 		return NULL;

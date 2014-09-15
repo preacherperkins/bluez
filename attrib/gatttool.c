@@ -35,9 +35,10 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
+#include "src/shared/util.h"
 #include "lib/uuid.h"
 #include "att.h"
-#include <btio/btio.h>
+#include "btio/btio.h"
 #include "gattrib.h"
 #include "gatt.h"
 #include "gatttool.h"
@@ -78,7 +79,7 @@ static void events_handler(const uint8_t *pdu, uint16_t len, gpointer user_data)
 	uint16_t handle, i, olen = 0;
 	size_t plen;
 
-	handle = att_get_u16(&pdu[1]);
+	handle = get_le16(&pdu[1]);
 
 	switch (pdu[0]) {
 	case ATT_OP_HANDLE_NOTIFY:
@@ -137,7 +138,7 @@ static void connect_cb(GIOChannel *io, GError *err, gpointer user_data)
 	operation(attrib);
 }
 
-static void primary_all_cb(GSList *services, guint8 status, gpointer user_data)
+static void primary_all_cb(uint8_t status, GSList *services, void *user_data)
 {
 	GSList *l;
 
@@ -157,8 +158,7 @@ done:
 	g_main_loop_quit(event_loop);
 }
 
-static void primary_by_uuid_cb(GSList *ranges, guint8 status,
-							gpointer user_data)
+static void primary_by_uuid_cb(uint8_t status, GSList *ranges, void *user_data)
 {
 	GSList *l;
 
@@ -191,8 +191,8 @@ static gboolean primary(gpointer user_data)
 	return FALSE;
 }
 
-static void char_discovered_cb(GSList *characteristics, guint8 status,
-							gpointer user_data)
+static void char_discovered_cb(uint8_t status, GSList *characteristics,
+								void *user_data)
 {
 	GSList *l;
 
@@ -272,7 +272,7 @@ static void char_read_by_uuid_cb(guint8 status, const guint8 *pdu,
 		uint8_t *value = list->data[i];
 		int j;
 
-		g_print("handle: 0x%04x \t value: ", att_get_u16(value));
+		g_print("handle: 0x%04x \t value: ", get_le16(value));
 		value += 2;
 		for (j = 0; j < list->len - 2; j++, value++)
 			g_print("%02x ", *value);
@@ -400,44 +400,23 @@ error:
 	return FALSE;
 }
 
-static void char_desc_cb(guint8 status, const guint8 *pdu, guint16 plen,
-							gpointer user_data)
+static void char_desc_cb(uint8_t status, GSList *descriptors, void *user_data)
 {
-	struct att_data_list *list;
-	guint8 format;
-	int i;
+	GSList *l;
 
-	if (status != 0) {
-		g_printerr("Discover all characteristic descriptors failed: "
-						"%s\n", att_ecode2str(status));
-		goto done;
+	if (status) {
+		g_printerr("Discover descriptors failed: %s\n",
+							att_ecode2str(status));
+		return;
 	}
 
-	list = dec_find_info_resp(pdu, plen, &format);
-	if (list == NULL)
-		goto done;
+	for (l = descriptors; l; l = l->next) {
+		struct gatt_desc *desc = l->data;
 
-	for (i = 0; i < list->num; i++) {
-		char uuidstr[MAX_LEN_UUID_STR];
-		uint16_t handle;
-		uint8_t *value;
-		bt_uuid_t uuid;
-
-		value = list->data[i];
-		handle = att_get_u16(value);
-
-		if (format == 0x01)
-			uuid = att_get_uuid16(&value[2]);
-		else
-			uuid = att_get_uuid128(&value[2]);
-
-		bt_uuid_to_string(&uuid, uuidstr, MAX_LEN_UUID_STR);
-		g_print("handle = 0x%04x, uuid = %s\n", handle, uuidstr);
+		g_print("handle = 0x%04x, uuid = %s\n", desc->handle,
+								desc->uuid);
 	}
 
-	att_data_list_free(list);
-
-done:
 	if (!opt_listen)
 		g_main_loop_quit(event_loop);
 }
@@ -446,7 +425,8 @@ static gboolean characteristics_desc(gpointer user_data)
 {
 	GAttrib *attrib = user_data;
 
-	gatt_discover_char_desc(attrib, opt_start, opt_end, char_desc_cb, NULL);
+	gatt_discover_desc(attrib, opt_start, opt_end, NULL, char_desc_cb,
+									NULL);
 
 	return FALSE;
 }

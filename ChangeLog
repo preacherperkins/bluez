@@ -1,3 +1,106 @@
+ver 5.21:
+	Fix issue with SDP requests and wrong PDU size.
+	Fix issue with handling passive scanning triggers.
+	Add support for storing and loading connection parameters.
+	Add support for kernel background auto-connection feature.
+	Add support for Android Bluetooth Scan Parameters feature.
+	Add support for Android Bluetooth Device Information feature.
+	Add support for Android Bluetooth Health Device interface.
+
+ver 5.20:
+	Fix issue with LED handling of PS3 controllers.
+	Add support for Android Bluetooth GATT server interface.
+	Add support for Android Bluetooth HID over GATT feature.
+	Add support for Android Bluetooth multi-profile feature.
+	Add support for Android Bluetooth aptX audio integration.
+
+	Note: aptX codec not included
+
+ver 5.19:
+	Fix issue with OBEX Put-Delete and Create-Empty methods.
+	Fix issue with AVRCP browsable/searchable player properties.
+	Fix issue with handling multiple default agents.
+	Fix issue with handling unpair event per bearer.
+	Fix issue with HID over GATT report ID presence.
+	Add support for HID protocol handling in userspace.
+	Add support for Bluetooth reconnection policy framework.
+	Add support for Android Bluetooth SCO over HCI transport.
+	Add support for Android Bluetooth audio quality control.
+	Add support for Android Bluetooth Low Energy only mode.
+
+ver 5.18:
+	Fix issue with identifying LE single mode devices.
+	Fix issue with L2CAP and RFCOMM peer address lookup.
+	Add support for handling OBEX authentication procedure.
+	Add support for Android Bluetooth GATT client interface.
+
+ver 5.17:
+	Fix issue with not resetting OBEX SRM setup.
+	Fix issue with BR/EDR devices and auto-connect list.
+	Fix issue with bonding complete detection as peripheral.
+	Fix issue with not updating bearer timestamp of connections.
+	Fix issue with paired property for multiple bearers.
+	Add support for Android Bluetooth Handsfree interface.
+	Add support for Android Bluetooth Wideband speech.
+
+ver 5.16:
+	Fix issue with HID over GATT physical location.
+	Fix issue with HID over GATT unique identifier.
+	Fix issue with missing paired property notification.
+	Fix issue with endianess of long term key storage.
+	Add support for storing signature resolving keys.
+	Add support for Android Bluetooth AVRCP interface.
+
+ver 5.15:
+	Fix issue with LE enabling and background scanning.
+	Fix issue with HID over GATT input device name.
+	Fix issue with storage of slave long term keys.
+	Add support for handling identity resolving keys.
+	Add support for Android Bluetooth A2DP interface.
+	Add support for Android Bluetooth audio interface.
+
+ver 5.14:
+	Fix issue with marking PS3 controllers as trusted.
+	Fix issue with authorization of PS3 controllers.
+	Add support for DualShock 4 controller detection.
+	Add support for legacy pairing emulation.
+	Add support for secure simple pairing emulation.
+	Add support for automated pairing testing.
+	Add support for RFCOMM protocol testing.
+	Add support for HCI controller testing.
+
+ver 5.13:
+	Fix issue with PS3 controller detection.
+	Add support for data transfers to L2CAP testing tool.
+	Add support for delay reporting to AVDTP testing tool.
+	Add support for Android Bluetooth Core interface.
+	Add support for Android Bluetooth Socket interface.
+	Add support for Android Bluetooth HID Host interface.
+	Add support for Android Bluetooth PAN interface.
+
+ver 5.12:
+	Fix issue with missing reply to DisconnectProfile.
+	Fix issue with icon property and class of device changes.
+	Fix issue with HID devices when SDP record is not available.
+	Fix issue with handling auto-pairing of printers.
+	Fix issue with agent authorization handling.
+	Add support for PS3 controller setup and pairing.
+	Add support for LE L2CAP CoC test capabilities.
+	Add support for AVDTP qualification test cases.
+	Add support for SMP cryptographic test cases.
+
+ver 5.11:
+	Fix issue with connection attempt when not powered.
+	Fix issue with assigning player to AVRCP target role.
+	Fix issue with OBEX default cache directory.
+	Fix issue with SDP search error handling.
+	Fix issue with processing of SDP records.
+	Fix issue with HID to HCI switching utility.
+	Fix issue with mgmt end-to-end testing tool.
+	Fix issue with L2CAP end-to-end testing tool.
+	Add support for SMP end-to-end testing tool.
+	Add support for more Wii controllers.
+
 ver 5.10:
 	Fix issue with discoverable timeout handling.
 	Fix issue with MAP messages and record version.

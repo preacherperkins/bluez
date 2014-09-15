@@ -43,14 +43,14 @@
 #include "src/device.h"
 #include "src/profile.h"
 #include "src/service.h"
+#include "src/log.h"
+#include "src/sdpd.h"
 
-#include "log.h"
 #include "avdtp.h"
 #include "sink.h"
 #include "source.h"
 #include "a2dp.h"
 #include "a2dp-codecs.h"
-#include "sdpd.h"
 #include "media.h"
 
 /* The duration that streams without users are allowed to stay in
@@ -1187,17 +1187,8 @@ static struct a2dp_server *find_server(GSList *list, struct btd_adapter *a)
 static struct a2dp_server *a2dp_server_register(struct btd_adapter *adapter)
 {
 	struct a2dp_server *server;
-	int av_err;
 
 	server = g_new0(struct a2dp_server, 1);
-
-	av_err = avdtp_init(adapter);
-	if (av_err < 0) {
-		DBG("AVDTP not registered");
-		g_free(server);
-		return NULL;
-	}
-
 	server->adapter = btd_adapter_ref(adapter);
 	servers = g_slist_append(servers, server);
 
@@ -1217,8 +1208,6 @@ static void a2dp_unregister_sep(struct a2dp_sep *sep)
 
 static void a2dp_server_unregister(struct a2dp_server *server)
 {
-	avdtp_exit(server->adapter);
-
 	servers = g_slist_remove(servers, server);
 	btd_adapter_unref(server->adapter);
 	g_free(server);
@@ -1401,18 +1390,14 @@ static gboolean check_vendor_codec(struct a2dp_sep *sep, uint8_t *cap,
 
 	local_codec = (a2dp_vendor_codec_t *) capabilities;
 
-	if (memcmp(remote_codec->vendor_id, local_codec->vendor_id,
-					sizeof(local_codec->vendor_id)))
+	if (btohl(remote_codec->vendor_id) != btohl(local_codec->vendor_id))
 		return FALSE;
 
-	if (memcmp(remote_codec->codec_id, local_codec->codec_id,
-					sizeof(local_codec->codec_id)))
+	if (btohs(remote_codec->codec_id) != btohs(local_codec->codec_id))
 		return FALSE;
 
-	DBG("vendor 0x%02x%02x%02x%02x codec 0x%02x%02x",
-			remote_codec->vendor_id[0], remote_codec->vendor_id[1],
-			remote_codec->vendor_id[2], remote_codec->vendor_id[3],
-			remote_codec->codec_id[0], remote_codec->codec_id[1]);
+	DBG("vendor 0x%08x codec 0x%04x", btohl(remote_codec->vendor_id),
+						btohs(remote_codec->codec_id));
 
 	return TRUE;
 }
@@ -1872,9 +1857,21 @@ static void a2dp_sink_remove(struct btd_service *service)
 static int a2dp_source_connect(struct btd_service *service)
 {
 	struct btd_device *dev = btd_service_get_device(service);
+	struct btd_adapter *adapter = device_get_adapter(dev);
+	struct a2dp_server *server;
 	const char *path = device_get_path(dev);
 
 	DBG("path %s", path);
+
+	server = find_server(servers, adapter);
+	if (!server || !server->sink_enabled) {
+		DBG("Unexpected error: cannot find server");
+		return -EPROTONOSUPPORT;
+	}
+
+	/* Return protocol not available if no record/endpoint exists */
+	if (server->sink_record_id == 0)
+		return -ENOPROTOOPT;
 
 	return source_connect(service);
 }
@@ -1886,15 +1883,27 @@ static int a2dp_source_disconnect(struct btd_service *service)
 
 	DBG("path %s", path);
 
-	return source_disconnect(service, FALSE);
+	return source_disconnect(service);
 }
 
 static int a2dp_sink_connect(struct btd_service *service)
 {
 	struct btd_device *dev = btd_service_get_device(service);
+	struct btd_adapter *adapter = device_get_adapter(dev);
+	struct a2dp_server *server;
 	const char *path = device_get_path(dev);
 
 	DBG("path %s", path);
+
+	server = find_server(servers, adapter);
+	if (!server || !server->source_enabled) {
+		DBG("Unexpected error: cannot find server");
+		return -EPROTONOSUPPORT;
+	}
+
+	/* Return protocol not available if no record/endpoint exists */
+	if (server->source_record_id == 0)
+		return -ENOPROTOOPT;
 
 	return sink_connect(service);
 }
@@ -1906,7 +1915,7 @@ static int a2dp_sink_disconnect(struct btd_service *service)
 
 	DBG("path %s", path);
 
-	return sink_disconnect(service, FALSE);
+	return sink_disconnect(service);
 }
 
 static int a2dp_source_server_probe(struct btd_profile *p,

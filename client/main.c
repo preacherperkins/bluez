@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <signal.h>
 #include <sys/signalfd.h>
 
@@ -58,6 +59,8 @@ static char *auto_register_agent = NULL;
 static GDBusProxy *default_ctrl;
 static GList *ctrl_list;
 static GList *dev_list;
+
+static guint input = 0;
 
 static const char * const agent_arguments[] = {
 	"on",
@@ -153,6 +156,8 @@ static void print_iter(const char *label, const char *name,
 	dbus_uint16_t valu16;
 	dbus_int16_t vals16;
 	const char *valstr;
+	DBusMessageIter subiter;
+	int type;
 
 	if (iter == NULL) {
 		rl_printf("%s%s is nil\n", label, name);
@@ -184,6 +189,24 @@ static void print_iter(const char *label, const char *name,
 	case DBUS_TYPE_INT16:
 		dbus_message_iter_get_basic(iter, &vals16);
 		rl_printf("%s%s: %d\n", label, name, vals16);
+		break;
+	case DBUS_TYPE_ARRAY:
+		dbus_message_iter_recurse(iter, &subiter);
+		rl_printf("%s%s:\n", label, name);
+
+		do {
+			type = dbus_message_iter_get_arg_type(&subiter);
+			if (type == DBUS_TYPE_INVALID)
+				break;
+
+			if (type == DBUS_TYPE_STRING) {
+				dbus_message_iter_get_basic(&subiter, &valstr);
+				rl_printf("\t%s\n", valstr);
+			}
+
+			dbus_message_iter_next(&subiter);
+		} while(true);
+
 		break;
 	default:
 		rl_printf("%s%s has unsupported type\n", label, name);
@@ -315,8 +338,11 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 			dev_list = NULL;
 		}
 	} else if (!strcmp(interface, "org.bluez.AgentManager1")) {
-		if (agent_manager == proxy)
+		if (agent_manager == proxy) {
 			agent_manager = NULL;
+			if (auto_register_agent)
+				agent_unregister(dbus_conn, NULL);
+		}
 	}
 }
 
@@ -534,6 +560,26 @@ static void cmd_devices(const char *arg)
 
 	for (list = g_list_first(dev_list); list; list = g_list_next(list)) {
 		GDBusProxy *proxy = list->data;
+		print_device(proxy, NULL);
+	}
+}
+
+static void cmd_paired_devices(const char *arg)
+{
+	GList *list;
+
+	for (list = g_list_first(dev_list); list; list = g_list_next(list)) {
+		GDBusProxy *proxy = list->data;
+		DBusMessageIter iter;
+		dbus_bool_t paired;
+
+		if (g_dbus_proxy_get_property(proxy, "Paired", &iter) == FALSE)
+			continue;
+
+		dbus_message_iter_get_basic(&iter, &paired);
+		if (!paired)
+			continue;
+
 		print_device(proxy, NULL);
 	}
 }
@@ -831,6 +877,93 @@ static void cmd_trust(const char *arg)
 	g_free(str);
 }
 
+static void cmd_untrust(const char *arg)
+{
+	GDBusProxy *proxy;
+	dbus_bool_t trusted;
+	char *str;
+
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing device address argument\n");
+		return;
+	}
+
+	proxy = find_proxy_by_address(dev_list, arg);
+	if (!proxy) {
+		rl_printf("Device %s not available\n", arg);
+		return;
+	}
+
+	trusted = FALSE;
+
+	str = g_strdup_printf("%s untrust", arg);
+
+	if (g_dbus_proxy_set_property_basic(proxy, "Trusted",
+					DBUS_TYPE_BOOLEAN, &trusted,
+					generic_callback, str, g_free) == TRUE)
+		return;
+
+	g_free(str);
+}
+
+static void cmd_block(const char *arg)
+{
+	GDBusProxy *proxy;
+	dbus_bool_t blocked;
+	char *str;
+
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing device address argument\n");
+		return;
+	}
+
+	proxy = find_proxy_by_address(dev_list, arg);
+	if (!proxy) {
+		rl_printf("Device %s not available\n", arg);
+		return;
+	}
+
+	blocked = TRUE;
+
+	str = g_strdup_printf("%s block", arg);
+
+	if (g_dbus_proxy_set_property_basic(proxy, "Blocked",
+					DBUS_TYPE_BOOLEAN, &blocked,
+					generic_callback, str, g_free) == TRUE)
+		return;
+
+	g_free(str);
+}
+
+static void cmd_unblock(const char *arg)
+{
+	GDBusProxy *proxy;
+	dbus_bool_t blocked;
+	char *str;
+
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing device address argument\n");
+		return;
+	}
+
+	proxy = find_proxy_by_address(dev_list, arg);
+	if (!proxy) {
+		rl_printf("Device %s not available\n", arg);
+		return;
+	}
+
+	blocked = FALSE;
+
+	str = g_strdup_printf("%s unblock", arg);
+
+	if (g_dbus_proxy_set_property_basic(proxy, "Blocked",
+					DBUS_TYPE_BOOLEAN, &blocked,
+					generic_callback, str, g_free) == TRUE)
+		return;
+
+	g_free(str);
+}
+
 static void remove_device_reply(DBusMessage *message, void *user_data)
 {
 	DBusError error;
@@ -1047,6 +1180,8 @@ static const struct {
 	{ "select",       "<ctrl>",   cmd_select, "Select default controller",
 							ctrl_generator },
 	{ "devices",      NULL,       cmd_devices, "List available devices" },
+	{ "paired-devices", NULL,     cmd_paired_devices,
+					"List paired devices"},
 	{ "system-alias", "<name>",   cmd_system_alias },
 	{ "reset-alias",  NULL,       cmd_reset_alias },
 	{ "power",        "<on/off>", cmd_power, "Set controller power" },
@@ -1066,6 +1201,12 @@ static const struct {
 							dev_generator },
 	{ "trust",        "<dev>",    cmd_trust, "Trust device",
 							dev_generator },
+	{ "untrust",      "<dev>",    cmd_untrust, "Untrust device",
+							dev_generator },
+	{ "block",        "<dev>",    cmd_block, "Block device",
+								dev_generator },
+	{ "unblock",      "<dev>",    cmd_unblock, "Unblock device",
+								dev_generator },
 	{ "remove",       "<dev>",    cmd_remove, "Remove device",
 							dev_generator },
 	{ "connect",      "<dev>",    cmd_connect, "Connect device",
@@ -1197,12 +1338,16 @@ done:
 static gboolean input_handler(GIOChannel *channel, GIOCondition condition,
 							gpointer user_data)
 {
+	if (condition & G_IO_IN) {
+		rl_callback_read_char();
+		return TRUE;
+	}
+
 	if (condition & (G_IO_HUP | G_IO_ERR | G_IO_NVAL)) {
 		g_main_loop_quit(main_loop);
 		return FALSE;
 	}
 
-	rl_callback_read_char();
 	return TRUE;
 }
 
@@ -1243,11 +1388,20 @@ static gboolean signal_handler(GIOChannel *channel, GIOCondition condition,
 
 	switch (si.ssi_signo) {
 	case SIGINT:
-		rl_replace_line("", 0);
-		rl_crlf();
-		rl_on_new_line();
-		rl_redisplay();
-		break;
+		if (input) {
+			rl_replace_line("", 0);
+			rl_crlf();
+			rl_on_new_line();
+			rl_redisplay();
+			break;
+		}
+
+		/*
+		 * If input was not yet setup up that means signal was received
+		 * while daemon was not yet running. Since user is not able
+		 * to terminate client by CTRL-D or typing exit treat this as
+		 * exit and fall through.
+		 */
 	case SIGTERM:
 		if (__terminated == 0) {
 			rl_replace_line("", 0);
@@ -1321,12 +1475,19 @@ static GOptionEntry options[] = {
 	{ NULL },
 };
 
+static void client_ready(GDBusClient *client, void *user_data)
+{
+	guint *input = user_data;
+
+	*input = setup_standard_input();
+}
+
 int main(int argc, char *argv[])
 {
 	GOptionContext *context;
 	GError *error = NULL;
 	GDBusClient *client;
-	guint signal, input;
+	guint signal;
 
 	context = g_option_context_new(NULL);
 	g_option_context_add_main_entries(context, options, NULL);
@@ -1358,7 +1519,6 @@ int main(int argc, char *argv[])
 	rl_set_prompt(PROMPT_OFF);
 	rl_redisplay();
 
-	input = setup_standard_input();
 	signal = setup_signalfd();
 	client = g_dbus_client_new(dbus_conn, "org.bluez", "/org/bluez");
 
@@ -1369,11 +1529,15 @@ int main(int argc, char *argv[])
 	g_dbus_client_set_proxy_handlers(client, proxy_added, proxy_removed,
 							property_changed, NULL);
 
+	input = 0;
+	g_dbus_client_set_ready_watch(client, client_ready, &input);
+
 	g_main_loop_run(main_loop);
 
 	g_dbus_client_unref(client);
 	g_source_remove(signal);
-	g_source_remove(input);
+	if (input > 0)
+		g_source_remove(input);
 
 	rl_message("");
 	rl_callback_handler_remove();

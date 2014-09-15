@@ -2,21 +2,21 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2013  Intel Corporation. All rights reserved.
+ *  Copyright (C) 2013-2014  Intel Corporation. All rights reserved.
  *
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
  *
- *  This program is distributed in the hope that it will be useful,
+ *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
@@ -36,287 +36,263 @@
 #include <unistd.h>
 
 #include <sys/signalfd.h>
-#include <sys/socket.h>
-#include <sys/un.h>
+#if defined(ANDROID)
+#include <sys/capability.h>
+#include <linux/prctl.h>
+#endif
 
 #include <glib.h>
 
-#include "log.h"
+#include "src/log.h"
 #include "src/sdpd.h"
 
 #include "lib/bluetooth.h"
-#include "lib/mgmt.h"
-#include "src/shared/mgmt.h"
 
-#include "adapter.h"
-#include "socket.h"
-#include "hid.h"
-#include "hal-msg.h"
+#include "ipc-common.h"
 #include "ipc.h"
+#include "bluetooth.h"
+#include "socket.h"
+#include "hidhost.h"
+#include "hal-msg.h"
+#include "a2dp.h"
+#include "pan.h"
+#include "avrcp.h"
+#include "handsfree.h"
+#include "gatt.h"
+#include "health.h"
 
-/* TODO: Consider to remove PLATFORM_SDKVERSION check if requirement
-*  for minimal Android platform version increases. */
-#if defined(ANDROID) && PLATFORM_SDK_VERSION >= 18
-#include <sys/capability.h>
-#endif
+#define STARTUP_GRACE_SECONDS 5
+#define SHUTDOWN_GRACE_SECONDS 10
+
+static guint bluetooth_start_timeout = 0;
+
+static bdaddr_t adapter_bdaddr;
 
 static GMainLoop *event_loop;
-static struct mgmt *mgmt_if = NULL;
 
-static uint8_t mgmt_version = 0;
-static uint8_t mgmt_revision = 0;
-
-static uint16_t adapter_index = MGMT_INDEX_NONE;
-
-static GIOChannel *hal_cmd_io = NULL;
-static GIOChannel *hal_notif_io = NULL;
-
-static volatile sig_atomic_t __terminated = 0;
+static struct ipc *hal_ipc = NULL;
 
 static bool services[HAL_SERVICE_ID_MAX + 1] = { false };
 
-static void service_register(void *buf, uint16_t len)
+static void service_register(const void *buf, uint16_t len)
 {
-	struct hal_cmd_register_module *m = buf;
-	const bdaddr_t *adapter_bdaddr = bt_adapter_get_address();
+	const struct hal_cmd_register_module *m = buf;
+	uint8_t status;
 
-	if (m->service_id > HAL_SERVICE_ID_MAX || services[m->service_id])
-		goto error;
+	if (m->service_id > HAL_SERVICE_ID_MAX || services[m->service_id]) {
+		status = HAL_STATUS_FAILED;
+		goto failed;
+	}
 
 	switch (m->service_id) {
 	case HAL_SERVICE_ID_BLUETOOTH:
-		if (!bt_adapter_register(hal_notif_io))
-			goto error;
+		if (!bt_bluetooth_register(hal_ipc, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
 
 		break;
-	case HAL_SERVICE_ID_SOCK:
-		if (!bt_socket_register(hal_notif_io, adapter_bdaddr))
-			goto error;
+	case HAL_SERVICE_ID_SOCKET:
+		bt_socket_register(hal_ipc, &adapter_bdaddr, m->mode);
 
 		break;
 	case HAL_SERVICE_ID_HIDHOST:
-		if (!bt_hid_register(hal_notif_io, adapter_bdaddr))
-			goto error;
+		if (!bt_hid_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_A2DP:
+		if (!bt_a2dp_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_PAN:
+		if (!bt_pan_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_AVRCP:
+		if (!bt_avrcp_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_HANDSFREE:
+		if (!bt_handsfree_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_GATT:
+		if (!bt_gatt_register(hal_ipc, &adapter_bdaddr)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_HEALTH:
+		if (!bt_health_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
 
 		break;
 	default:
 		DBG("service %u not supported", m->service_id);
-		goto error;
+		status = HAL_STATUS_FAILED;
+		goto failed;
 	}
 
 	services[m->service_id] = true;
 
-	ipc_send(hal_cmd_io, HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE, 0,
-								NULL, -1);
+	status = HAL_STATUS_SUCCESS;
 
 	info("Service ID=%u registered", m->service_id);
-	return;
-error:
-	ipc_send_rsp(hal_cmd_io, HAL_SERVICE_ID_CORE, HAL_STATUS_FAILED);
+
+failed:
+	ipc_send_rsp(hal_ipc, HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
+								status);
 }
 
-static void service_unregister(void *buf, uint16_t len)
+static void service_unregister(const void *buf, uint16_t len)
 {
-	struct hal_cmd_unregister_module *m = buf;
+	const struct hal_cmd_unregister_module *m = buf;
+	uint8_t status;
 
-	if (m->service_id > HAL_SERVICE_ID_MAX || !services[m->service_id])
-		goto error;
+	if (m->service_id > HAL_SERVICE_ID_MAX || !services[m->service_id]) {
+		status = HAL_STATUS_FAILED;
+		goto failed;
+	}
 
 	switch (m->service_id) {
 	case HAL_SERVICE_ID_BLUETOOTH:
-		bt_adapter_unregister();
+		bt_bluetooth_unregister();
 		break;
-	case HAL_SERVICE_ID_SOCK:
+	case HAL_SERVICE_ID_SOCKET:
 		bt_socket_unregister();
 		break;
 	case HAL_SERVICE_ID_HIDHOST:
 		bt_hid_unregister();
 		break;
+	case HAL_SERVICE_ID_A2DP:
+		bt_a2dp_unregister();
+		break;
+	case HAL_SERVICE_ID_PAN:
+		bt_pan_unregister();
+		break;
+	case HAL_SERVICE_ID_AVRCP:
+		bt_avrcp_unregister();
+		break;
+	case HAL_SERVICE_ID_HANDSFREE:
+		bt_handsfree_unregister();
+		break;
+	case HAL_SERVICE_ID_GATT:
+		bt_gatt_unregister();
+		break;
+	case HAL_SERVICE_ID_HEALTH:
+		bt_health_unregister();
+		break;
 	default:
-		/* This would indicate bug in HAL, as unregister should not be
-		 * called in init failed */
+		/*
+		 * This would indicate bug in HAL, as unregister should not be
+		 * called in init failed
+		 */
 		DBG("service %u not supported", m->service_id);
-		goto error;
+		status = HAL_STATUS_FAILED;
+		goto failed;
 	}
 
 	services[m->service_id] = false;
 
-	ipc_send(hal_cmd_io, HAL_SERVICE_ID_CORE, HAL_OP_UNREGISTER_MODULE,
-								0, NULL, -1);
+	status = HAL_STATUS_SUCCESS;
 
 	info("Service ID=%u unregistered", m->service_id);
-	return;
-error:
-	ipc_send_rsp(hal_cmd_io, HAL_SERVICE_ID_CORE, HAL_STATUS_FAILED);
+
+failed:
+	ipc_send_rsp(hal_ipc, HAL_SERVICE_ID_CORE, HAL_OP_UNREGISTER_MODULE,
+								status);
 }
 
-static void handle_service_core(uint8_t opcode, void *buf, uint16_t len)
+static const struct ipc_handler cmd_handlers[] = {
+	/* HAL_OP_REGISTER_MODULE */
+	{ service_register, false, sizeof(struct hal_cmd_register_module) },
+	/* HAL_OP_UNREGISTER_MODULE */
+	{ service_unregister, false, sizeof(struct hal_cmd_unregister_module) },
+};
+
+static void bluetooth_stopped(void)
 {
-	switch (opcode) {
-	case HAL_OP_REGISTER_MODULE:
-		service_register(buf, len);
-		break;
-	case HAL_OP_UNREGISTER_MODULE:
-		service_unregister(buf, len);
-		break;
-	default:
-		ipc_send_rsp(hal_cmd_io, HAL_SERVICE_ID_CORE,
-							HAL_STATUS_FAILED);
-		break;
-	}
+	g_main_loop_quit(event_loop);
 }
 
-static gboolean cmd_watch_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
+static gboolean quit_eventloop(gpointer user_data)
 {
-	char buf[BLUEZ_HAL_MTU];
-	struct hal_hdr *msg = (void *) buf;
-	ssize_t ret;
-	int fd;
-
-	if (cond & (G_IO_NVAL | G_IO_ERR | G_IO_HUP)) {
-		info("HAL command socket closed, terminating");
-		goto fail;
-	}
-
-	fd = g_io_channel_unix_get_fd(io);
-
-	ret = read(fd, buf, sizeof(buf));
-	if (ret < 0) {
-		error("HAL command read failed, terminating (%s)",
-							strerror(errno));
-		goto fail;
-	}
-
-	if (ret < (ssize_t) sizeof(*msg)) {
-		error("HAL command too small, terminating (%zd)", ret);
-		goto fail;
-	}
-
-	if (ret != (ssize_t) (sizeof(*msg) + msg->len)) {
-		error("Malformed HAL command (%zd bytes), terminating", ret);
-		goto fail;
-	}
-
-	DBG("service_id %u opcode %u len %u", msg->service_id, msg->opcode,
-								msg->len);
-
-	switch (msg->service_id) {
-	case HAL_SERVICE_ID_CORE:
-		handle_service_core(msg->opcode, buf + sizeof(*msg), msg->len);
-		break;
-	case HAL_SERVICE_ID_BLUETOOTH:
-		bt_adapter_handle_cmd(hal_cmd_io, msg->opcode, msg->payload,
-								msg->len);
-		break;
-	case HAL_SERVICE_ID_HIDHOST:
-		bt_hid_handle_cmd(hal_cmd_io, msg->opcode, msg->payload,
-								msg->len);
-		break;
-	default:
-		ipc_send_rsp(hal_cmd_io, msg->service_id, HAL_STATUS_FAILED);
-		break;
-	}
-
-	return TRUE;
-
-fail:
 	g_main_loop_quit(event_loop);
 	return FALSE;
 }
 
-static gboolean notif_watch_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
+static void stop_bluetooth(void)
 {
-	info("HAL notification socket closed, terminating");
-	g_main_loop_quit(event_loop);
+	static bool __stop = false;
 
-	return FALSE;
+	if (__stop)
+		return;
+
+	__stop = true;
+
+	if (!bt_bluetooth_stop(bluetooth_stopped)) {
+		g_main_loop_quit(event_loop);
+		return;
+	}
+
+	g_timeout_add_seconds(SHUTDOWN_GRACE_SECONDS, quit_eventloop, NULL);
 }
 
-static GIOChannel *connect_hal(GIOFunc connect_cb)
+static void ipc_disconnected(void *data)
 {
-	struct sockaddr_un addr;
-	GIOCondition cond;
-	GIOChannel *io;
-	int sk;
-
-	sk = socket(PF_LOCAL, SOCK_SEQPACKET, 0);
-	if (sk < 0) {
-		error("Failed to create socket: %d (%s)", errno,
-							strerror(errno));
-		return NULL;
-	}
-
-	io = g_io_channel_unix_new(sk);
-
-	g_io_channel_set_close_on_unref(io, TRUE);
-	g_io_channel_set_flags(io, G_IO_FLAG_NONBLOCK, NULL);
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-
-	memcpy(addr.sun_path, BLUEZ_HAL_SK_PATH, sizeof(BLUEZ_HAL_SK_PATH));
-
-	if (connect(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-		error("Failed to connect HAL socket: %d (%s)", errno,
-							strerror(errno));
-		g_io_channel_unref(io);
-		return NULL;
-	}
-
-	cond = G_IO_OUT | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
-
-	g_io_add_watch(io, cond, connect_cb, NULL);
-
-	return io;
+	stop_bluetooth();
 }
 
-static gboolean notif_connect_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
+static void adapter_ready(int err, const bdaddr_t *addr)
 {
-	DBG("");
-
-	if (cond & (G_IO_NVAL | G_IO_ERR | G_IO_HUP)) {
-		g_main_loop_quit(event_loop);
-		return FALSE;
+	if (err < 0) {
+		error("Adapter initialization failed: %s", strerror(-err));
+		exit(EXIT_FAILURE);
 	}
 
-	cond = G_IO_ERR | G_IO_HUP | G_IO_NVAL;
+	bacpy(&adapter_bdaddr, addr);
 
-	g_io_add_watch(io, cond, notif_watch_cb, NULL);
-
-	cond = G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL;
-
-	g_io_add_watch(hal_cmd_io, cond, cmd_watch_cb, NULL);
-
-	info("Successfully connected to HAL");
-
-	return FALSE;
-}
-
-static gboolean cmd_connect_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
-{
-	DBG("");
-
-	if (cond & (G_IO_NVAL | G_IO_ERR | G_IO_HUP)) {
-		g_main_loop_quit(event_loop);
-		return FALSE;
+	if (bluetooth_start_timeout > 0) {
+		g_source_remove(bluetooth_start_timeout);
+		bluetooth_start_timeout = 0;
 	}
 
-	hal_notif_io = connect_hal(notif_connect_cb);
-	if (!hal_notif_io) {
-		error("Cannot connect to HAL, terminating");
-		g_main_loop_quit(event_loop);
+	info("Adapter initialized");
+
+	hal_ipc = ipc_init(BLUEZ_HAL_SK_PATH, sizeof(BLUEZ_HAL_SK_PATH),
+						HAL_SERVICE_ID_MAX, true,
+						ipc_disconnected, NULL);
+	if (!hal_ipc) {
+		error("Failed to initialize IPC");
+		exit(EXIT_FAILURE);
 	}
 
-	return FALSE;
+	ipc_register(hal_ipc, HAL_SERVICE_ID_CORE, cmd_handlers,
+						G_N_ELEMENTS(cmd_handlers));
 }
 
 static gboolean signal_handler(GIOChannel *channel, GIOCondition cond,
 							gpointer user_data)
 {
+	static bool __terminated = false;
 	struct signalfd_siginfo si;
 	ssize_t result;
 	int fd;
@@ -333,12 +309,12 @@ static gboolean signal_handler(GIOChannel *channel, GIOCondition cond,
 	switch (si.ssi_signo) {
 	case SIGINT:
 	case SIGTERM:
-		if (__terminated == 0) {
+		if (!__terminated) {
 			info("Terminating");
-			g_main_loop_quit(event_loop);
+			stop_bluetooth();
 		}
 
-		__terminated = 1;
+		__terminated = true;
 		break;
 	}
 
@@ -383,194 +359,64 @@ static guint setup_signalfd(void)
 }
 
 static gboolean option_version = FALSE;
+static gint option_index = -1;
+static gboolean option_dbg = FALSE;
+static gboolean option_mgmt_dbg = FALSE;
 
 static GOptionEntry options[] = {
 	{ "version", 'v', 0, G_OPTION_ARG_NONE, &option_version,
 				"Show version information and exit", NULL },
+	{ "index", 'i', 0, G_OPTION_ARG_INT, &option_index,
+				"Use specified controller", "INDEX"},
+	{ "debug", 'd', 0, G_OPTION_ARG_NONE, &option_dbg,
+				"Enable debug logs", NULL},
+	{ "mgmt-debug", 0, 0, G_OPTION_ARG_NONE, &option_mgmt_dbg,
+				"Enable mgmt debug logs", NULL},
+
 	{ NULL }
 };
 
-static void adapter_ready(int err)
+static void cleanup_services(void)
 {
-	if (err) {
-		error("Adapter initialization failed: %s", strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	info("Adapter initialized");
-
-	hal_cmd_io = connect_hal(cmd_connect_cb);
-	if (!hal_cmd_io) {
-		error("Cannot connect to HAL, terminating");
-		g_main_loop_quit(event_loop);
-	}
-}
-
-static void mgmt_index_added_event(uint16_t index, uint16_t length,
-					const void *param, void *user_data)
-{
-	DBG("index %u", index);
-
-	if (adapter_index != MGMT_INDEX_NONE) {
-		DBG("skip event for index %u", index);
-		return;
-	}
-
-	adapter_index = index;
-	bt_adapter_init(index, mgmt_if, adapter_ready);
-}
-
-static void mgmt_index_removed_event(uint16_t index, uint16_t length,
-					const void *param, void *user_data)
-{
-	DBG("index %u", index);
-
-	if (index != adapter_index)
-		return;
-
-	error("Adapter was removed. Exiting.");
-	g_main_loop_quit(event_loop);
-}
-
-static void read_index_list_complete(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	const struct mgmt_rp_read_index_list *rp = param;
-	uint16_t num;
 	int i;
 
 	DBG("");
 
-	if (status) {
-		error("%s: Failed to read index list: %s (0x%02x)",
-					__func__, mgmt_errstr(status), status);
-		return;
-	}
+	for (i = HAL_SERVICE_ID_BLUETOOTH; i < HAL_SERVICE_ID_MAX + 1; i++) {
+		if (!services[i])
+			continue;
 
-	if (length < sizeof(*rp)) {
-		error("%s: Wrong size of read index list response", __func__);
-		return;
-	}
+		switch (i) {
+		case HAL_SERVICE_ID_BLUETOOTH:
+			bt_bluetooth_unregister();
+			break;
+		case HAL_SERVICE_ID_SOCKET:
+			bt_socket_unregister();
+			break;
+		case HAL_SERVICE_ID_HIDHOST:
+			bt_hid_unregister();
+			break;
+		case HAL_SERVICE_ID_A2DP:
+			bt_a2dp_unregister();
+			break;
+		case HAL_SERVICE_ID_AVRCP:
+			bt_avrcp_unregister();
+			break;
+		case HAL_SERVICE_ID_PAN:
+			bt_pan_unregister();
+			break;
+		case HAL_SERVICE_ID_HANDSFREE:
+			bt_handsfree_unregister();
+			break;
+		case HAL_SERVICE_ID_GATT:
+			bt_gatt_unregister();
+			break;
+		case HAL_SERVICE_ID_HEALTH:
+			bt_health_unregister();
+			break;
+		}
 
-	num = btohs(rp->num_controllers);
-
-	DBG("Number of controllers: %u", num);
-
-	if (num * sizeof(uint16_t) + sizeof(*rp) != length) {
-		error("%s: Incorrect pkt size for index list rsp", __func__);
-		return;
-	}
-
-	for (i = 0; i < num; i++) {
-		uint16_t index;
-
-		index = btohs(rp->index[i]);
-
-		/**
-		 * Use index added event notification.
-		 */
-		mgmt_index_added_event(index, 0, NULL, NULL);
-	}
-}
-
-static void read_commands_complete(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	const struct mgmt_rp_read_commands *rp = param;
-
-	DBG("");
-
-	if (status) {
-		error("Failed to read supported commands: %s (0x%02x)",
-						mgmt_errstr(status), status);
-		return;
-	}
-
-	if (length < sizeof(*rp)) {
-		error("Wrong size response");
-		return;
-	}
-}
-
-static void read_version_complete(uint8_t status, uint16_t length,
-					const void *param, void *user_data)
-{
-	const struct mgmt_rp_read_version *rp = param;
-
-	DBG("");
-
-	if (status) {
-		error("Failed to read version information: %s (0x%02x)",
-						mgmt_errstr(status), status);
-		return;
-	}
-
-	if (length < sizeof(*rp)) {
-		error("Wrong size response");
-		return;
-	}
-
-	mgmt_version = rp->version;
-	mgmt_revision = btohs(rp->revision);
-
-	info("Bluetooth management interface %u.%u initialized",
-						mgmt_version, mgmt_revision);
-
-	if (mgmt_version < 1) {
-		error("Version 1.0 or later of management interface required");
-		abort();
-	}
-
-	mgmt_send(mgmt_if, MGMT_OP_READ_COMMANDS, MGMT_INDEX_NONE, 0, NULL,
-					read_commands_complete, NULL, NULL);
-
-	mgmt_register(mgmt_if, MGMT_EV_INDEX_ADDED, MGMT_INDEX_NONE,
-					mgmt_index_added_event, NULL, NULL);
-	mgmt_register(mgmt_if, MGMT_EV_INDEX_REMOVED, MGMT_INDEX_NONE,
-					mgmt_index_removed_event, NULL, NULL);
-
-	if (mgmt_send(mgmt_if, MGMT_OP_READ_INDEX_LIST, MGMT_INDEX_NONE, 0,
-			NULL, read_index_list_complete, NULL, NULL) > 0)
-		return;
-
-	error("Failed to read controller index list");
-}
-
-static bool init_mgmt_interface(void)
-{
-	mgmt_if = mgmt_new_default();
-	if (!mgmt_if) {
-		error("Failed to access management interface");
-		return false;
-	}
-
-	if (mgmt_send(mgmt_if, MGMT_OP_READ_VERSION, MGMT_INDEX_NONE, 0, NULL,
-				read_version_complete, NULL, NULL) == 0) {
-		error("Error sending READ_VERSION mgmt command");
-		return false;
-	}
-
-	return true;
-}
-
-static void cleanup_mgmt_interface(void)
-{
-	mgmt_unref(mgmt_if);
-	mgmt_if = NULL;
-}
-
-static void cleanup_hal_connection(void)
-{
-	if (hal_cmd_io) {
-		g_io_channel_shutdown(hal_cmd_io, TRUE, NULL);
-		g_io_channel_unref(hal_cmd_io);
-		hal_cmd_io = NULL;
-	}
-
-	if (hal_notif_io) {
-		g_io_channel_shutdown(hal_notif_io, TRUE, NULL);
-		g_io_channel_unref(hal_notif_io);
-		hal_notif_io = NULL;
+		services[i] = false;
 	}
 }
 
@@ -583,10 +429,28 @@ static bool set_capabilities(void)
 	header.version = _LINUX_CAPABILITY_VERSION;
 	header.pid = 0;
 
+	/*
+	 * CAP_NET_ADMIN: Allow use of MGMT interface
+	 * CAP_NET_BIND_SERVICE: Allow use of privileged PSM
+	 * CAP_NET_RAW: Allow use of bnep ioctl calls
+	 */
 	cap.effective = cap.permitted =
+		CAP_TO_MASK(CAP_NET_RAW) |
 		CAP_TO_MASK(CAP_NET_ADMIN) |
 		CAP_TO_MASK(CAP_NET_BIND_SERVICE);
 	cap.inheritable = 0;
+
+	/* don't clear capabilities when dropping root */
+	if (prctl(PR_SET_KEEPCAPS, 1) < 0) {
+		error("%s: prctl(): %s", __func__, strerror(errno));
+		return false;
+	}
+
+	/* Android bluetooth user UID=1002 */
+	if (setuid(1002) < 0) {
+		error("%s: setuid(): %s", __func__, strerror(errno));
+		return false;
+	}
 
 	/* TODO: Move to cap_set_proc once bionic support it */
 	if (capset(&header, &cap) < 0) {
@@ -633,32 +497,62 @@ int main(int argc, char *argv[])
 		exit(EXIT_SUCCESS);
 	}
 
-	event_loop = g_main_loop_new(NULL, FALSE);
 	signal = setup_signalfd();
 	if (!signal)
 		return EXIT_FAILURE;
 
-	__btd_log_init("*", 0);
+	if (option_dbg || option_mgmt_dbg)
+		__btd_log_init("*", 0);
+	else
+		__btd_log_init(NULL, 0);
 
-	if (!set_capabilities())
+	if (!set_capabilities()) {
+		__btd_log_cleanup();
+		g_source_remove(signal);
 		return EXIT_FAILURE;
+	}
 
-	if (!init_mgmt_interface())
+	bluetooth_start_timeout = g_timeout_add_seconds(STARTUP_GRACE_SECONDS,
+							quit_eventloop, NULL);
+	if (bluetooth_start_timeout == 0) {
+		error("Failed to init startup timeout");
+		__btd_log_cleanup();
+		g_source_remove(signal);
 		return EXIT_FAILURE;
+	}
+
+	if (!bt_bluetooth_start(option_index, option_mgmt_dbg, adapter_ready)) {
+		__btd_log_cleanup();
+		g_source_remove(bluetooth_start_timeout);
+		g_source_remove(signal);
+		return EXIT_FAILURE;
+	}
 
 	/* Use params: mtu = 0, flags = 0 */
 	start_sdp_server(0, 0);
 
 	DBG("Entering main loop");
 
+	event_loop = g_main_loop_new(NULL, FALSE);
+
 	g_main_loop_run(event_loop);
 
 	g_source_remove(signal);
 
-	cleanup_hal_connection();
+	if (bluetooth_start_timeout > 0)
+		g_source_remove(bluetooth_start_timeout);
+
+	cleanup_services();
+
 	stop_sdp_server();
-	cleanup_mgmt_interface();
+	bt_bluetooth_cleanup();
 	g_main_loop_unref(event_loop);
+
+	/* If no adapter was initialized, hal_ipc is NULL */
+	if (hal_ipc) {
+		ipc_unregister(hal_ipc, HAL_SERVICE_ID_CORE);
+		ipc_cleanup(hal_ipc);
+	}
 
 	info("Exit");
 

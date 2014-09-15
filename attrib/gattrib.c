@@ -34,12 +34,13 @@
 #include <stdio.h>
 
 #include <bluetooth/bluetooth.h>
-#include <btio/btio.h>
 
+#include "btio/btio.h"
 #include "lib/uuid.h"
-#include "log.h"
-#include "att.h"
-#include "gattrib.h"
+#include "src/shared/util.h"
+#include "src/log.h"
+#include "attrib/att.h"
+#include "attrib/gattrib.h"
 
 #define GATT_TIMEOUT 30
 
@@ -381,7 +382,7 @@ static bool match_event(struct event *evt, const uint8_t *pdu, gsize len)
 	if (len < 3)
 		return false;
 
-	handle = att_get_u16(&pdu[1]);
+	handle = get_le16(&pdu[1]);
 
 	if (evt->expected == pdu[0] && evt->handle == handle)
 		return true;
@@ -402,7 +403,16 @@ static gboolean received_data(GIOChannel *io, GIOCondition cond, gpointer data)
 		return FALSE;
 
 	if (cond & (G_IO_HUP | G_IO_ERR | G_IO_NVAL)) {
+		struct command *c;
+
+		while ((c = g_queue_pop_head(attrib->requests))) {
+			if (c->func)
+				c->func(ATT_ECODE_IO, NULL, 0, c->user_data);
+			command_destroy(c);
+		}
+
 		attrib->read_watch = 0;
+
 		return FALSE;
 	}
 

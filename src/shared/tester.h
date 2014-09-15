@@ -2,7 +2,7 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2012  Intel Corporation. All rights reserved.
+ *  Copyright (C) 2012-2014  Intel Corporation. All rights reserved.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -32,6 +32,8 @@ bool tester_use_debug(void);
 void tester_print(const char *format, ...)
 				__attribute__((format(printf, 1, 2)));
 void tester_warn(const char *format, ...)
+				__attribute__((format(printf, 1, 2)));
+void tester_debug(const char *format, ...)
 				__attribute__((format(printf, 1, 2)));
 
 typedef void (*tester_destroy_func_t)(void *user_data);

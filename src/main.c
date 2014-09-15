@@ -55,6 +55,7 @@
 #include "dbus-common.h"
 #include "agent.h"
 #include "profile.h"
+#include "gatt.h"
 #include "systemd.h"
 
 #define BLUEZ_NAME "org.bluez"
@@ -65,11 +66,13 @@
 #define SHUTDOWN_GRACE_SECONDS 10
 
 struct main_opts main_opts;
+static GKeyFile *main_conf;
 
 static const char * const supported_options[] = {
 	"Name",
 	"Class",
 	"DiscoverableTimeout",
+	"AlwaysPairable",
 	"PairableTimeout",
 	"AutoConnectTimeout",
 	"DeviceID",
@@ -77,6 +80,11 @@ static const char * const supported_options[] = {
 	"NameResolving",
 	"DebugKeys",
 };
+
+GKeyFile *btd_get_main_conf(void)
+{
+	return main_conf;
+}
 
 static GKeyFile *load_config(const char *file)
 {
@@ -132,6 +140,7 @@ done:
 
 static void check_config(GKeyFile *config)
 {
+	const char *valid_groups[] = { "General", "Policy", NULL };
 	char **keys;
 	int i;
 
@@ -141,7 +150,17 @@ static void check_config(GKeyFile *config)
 	keys = g_key_file_get_groups(config, NULL);
 
 	for (i = 0; keys != NULL && keys[i] != NULL; i++) {
-		if (!g_str_equal(keys[i], "General"))
+		const char **group;
+		bool match = false;
+
+		for (group = valid_groups; *group; group++) {
+			if (g_str_equal(keys[i], *group)) {
+				match = true;
+				break;
+			}
+		}
+
+		if (!match)
 			warn("Unknown group %s in main.conf", keys[i]);
 	}
 
@@ -487,7 +506,6 @@ int main(int argc, char *argv[])
 	uint16_t sdp_mtu = 0;
 	uint32_t sdp_flags = 0;
 	int gdbus_flags = 0;
-	GKeyFile *config;
 	guint signal, watchdog;
 	const char *watchdog_usec;
 
@@ -522,14 +540,21 @@ int main(int argc, char *argv[])
 
 	sd_notify(0, "STATUS=Starting up");
 
-	config = load_config(CONFIGDIR "/main.conf");
+	main_conf = load_config(CONFIGDIR "/main.conf");
 
-	parse_config(config);
+	parse_config(main_conf);
 
 	if (connect_dbus() < 0) {
 		error("Unable to get on D-Bus");
 		exit(1);
 	}
+
+	if (option_experimental)
+		gdbus_flags = G_DBUS_FLAG_ENABLE_EXPERIMENTAL;
+
+	g_dbus_set_flags(gdbus_flags);
+
+	gatt_init();
 
 	if (adapter_init() < 0) {
 		error("Adapter handling initialization failed");
@@ -539,11 +564,6 @@ int main(int argc, char *argv[])
 	btd_device_init();
 	btd_agent_init();
 	btd_profile_init();
-
-	if (option_experimental)
-		gdbus_flags = G_DBUS_FLAG_ENABLE_EXPERIMENTAL;
-
-	g_dbus_set_flags(gdbus_flags);
 
 	if (option_compat == TRUE)
 		sdp_flags |= SDP_SERVER_COMPAT;
@@ -598,14 +618,16 @@ int main(int argc, char *argv[])
 
 	adapter_cleanup();
 
+	gatt_cleanup();
+
 	rfkill_exit();
 
 	stop_sdp_server();
 
 	g_main_loop_unref(event_loop);
 
-	if (config)
-		g_key_file_free(config);
+	if (main_conf)
+		g_key_file_free(main_conf);
 
 	disconnect_dbus();
 

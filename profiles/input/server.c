@@ -35,24 +35,29 @@
 #include <glib.h>
 #include <dbus/dbus.h>
 
-#include "log.h"
+#include "src/log.h"
 
-#include "glib-helper.h"
+#include "src/uuid-helper.h"
 #include "btio/btio.h"
 #include "lib/uuid.h"
-#include "../src/adapter.h"
-#include "../src/device.h"
-#include "../src/profile.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/profile.h"
 
 #include "device.h"
 #include "server.h"
+
+struct confirm_data {
+	bdaddr_t dst;
+	GIOChannel *io;
+};
 
 static GSList *servers = NULL;
 struct input_server {
 	bdaddr_t src;
 	GIOChannel *ctrl;
 	GIOChannel *intr;
-	GIOChannel *confirm;
+	struct confirm_data *confirm;
 };
 
 static int server_cmp(gconstpointer s, gconstpointer user_data)
@@ -61,6 +66,81 @@ static int server_cmp(gconstpointer s, gconstpointer user_data)
 	const bdaddr_t *src = user_data;
 
 	return bacmp(&server->src, src);
+}
+
+struct sixaxis_data {
+	GIOChannel *chan;
+	uint16_t psm;
+};
+
+static void sixaxis_sdp_cb(struct btd_device *dev, int err, void *user_data)
+{
+	struct sixaxis_data *data = user_data;
+	const bdaddr_t *src;
+
+	DBG("err %d (%s)", err, strerror(-err));
+
+	if (err < 0)
+		goto fail;
+
+	src = btd_adapter_get_address(device_get_adapter(dev));
+
+	if (input_device_set_channel(src, device_get_address(dev), data->psm,
+								data->chan) < 0)
+		goto fail;
+
+	g_io_channel_unref(data->chan);
+	g_free(data);
+
+	return;
+
+fail:
+	g_io_channel_shutdown(data->chan, TRUE, NULL);
+	g_io_channel_unref(data->chan);
+	g_free(data);
+}
+
+static void sixaxis_browse_sdp(const bdaddr_t *src, const bdaddr_t *dst,
+						GIOChannel *chan, uint16_t psm)
+{
+	struct btd_device *device;
+	struct sixaxis_data *data;
+
+	device = btd_adapter_find_device(adapter_find(src), dst, BDADDR_BREDR);
+	if (!device)
+		return;
+
+	data = g_new0(struct sixaxis_data, 1);
+	data->chan = g_io_channel_ref(chan);
+	data->psm = psm;
+
+	if (psm == L2CAP_PSM_HIDP_CTRL)
+		device_discover_services(device);
+
+	device_wait_for_svc_complete(device, sixaxis_sdp_cb, data);
+}
+
+static bool dev_is_sixaxis(const bdaddr_t *src, const bdaddr_t *dst)
+{
+	struct btd_device *device;
+	uint16_t vid, pid;
+
+	device = btd_adapter_find_device(adapter_find(src), dst, BDADDR_BREDR);
+	if (!device)
+		return false;
+
+	vid = btd_device_get_vendor(device);
+	pid = btd_device_get_product(device);
+
+	/* DualShock 3 */
+	if (vid == 0x054c && pid == 0x0268)
+		return true;
+
+	/* DualShock 4 */
+	if (vid == 0x054c && pid == 0x05c4)
+		return true;
+
+	return false;
 }
 
 static void connect_event_cb(GIOChannel *chan, GError *err, gpointer data)
@@ -95,6 +175,11 @@ static void connect_event_cb(GIOChannel *chan, GError *err, gpointer data)
 	if (ret == 0)
 		return;
 
+	if (ret == -ENOENT && dev_is_sixaxis(&src, &dst)) {
+		sixaxis_browse_sdp(&src, &dst, chan, psm);
+		return;
+	}
+
 	error("Refusing input device connect: %s (%d)", strerror(-ret), -ret);
 
 	/* Send unplug virtual cable to unknown devices */
@@ -111,41 +196,36 @@ static void connect_event_cb(GIOChannel *chan, GError *err, gpointer data)
 static void auth_callback(DBusError *derr, void *user_data)
 {
 	struct input_server *server = user_data;
-	bdaddr_t src, dst;
+	struct confirm_data *confirm = server->confirm;
 	GError *err = NULL;
-
-	bt_io_get(server->confirm, &err,
-			BT_IO_OPT_SOURCE_BDADDR, &src,
-			BT_IO_OPT_DEST_BDADDR, &dst,
-			BT_IO_OPT_INVALID);
-	if (err) {
-		error("%s", err->message);
-		g_error_free(err);
-		goto reject;
-	}
 
 	if (derr) {
 		error("Access denied: %s", derr->message);
 		goto reject;
 	}
 
-	if (!bt_io_accept(server->confirm, connect_event_cb, server,
-				NULL, &err)) {
+	if (!input_device_exists(&server->src, &confirm->dst) &&
+				!dev_is_sixaxis(&server->src, &confirm->dst))
+		return;
+
+	if (!bt_io_accept(confirm->io, connect_event_cb, server, NULL, &err)) {
 		error("bt_io_accept: %s", err->message);
 		g_error_free(err);
 		goto reject;
 	}
 
-	g_io_channel_unref(server->confirm);
+	g_io_channel_unref(confirm->io);
+	g_free(server->confirm);
 	server->confirm = NULL;
 
 	return;
 
 reject:
-	g_io_channel_shutdown(server->confirm, TRUE, NULL);
-	g_io_channel_unref(server->confirm);
+	g_io_channel_shutdown(confirm->io, TRUE, NULL);
+	g_io_channel_unref(confirm->io);
 	server->confirm = NULL;
-	input_device_close_channels(&src, &dst);
+	input_device_close_channels(&server->src, &confirm->dst);
+	g_free(confirm);
 }
 
 static void confirm_event_cb(GIOChannel *chan, gpointer user_data)
@@ -165,7 +245,8 @@ static void confirm_event_cb(GIOChannel *chan, gpointer user_data)
 	if (err) {
 		error("%s", err->message);
 		g_error_free(err);
-		goto drop;
+		g_io_channel_shutdown(chan, TRUE, NULL);
+		return;
 	}
 
 	ba2str(&dst, addr);
@@ -175,12 +256,14 @@ static void confirm_event_cb(GIOChannel *chan, gpointer user_data)
 		goto drop;
 	}
 
-	if (!input_device_exists(&src, &dst)) {
+	if (!input_device_exists(&src, &dst) && !dev_is_sixaxis(&src, &dst)) {
 		error("Refusing connection from %s: unknown device", addr);
 		goto drop;
 	}
 
-	server->confirm = g_io_channel_ref(chan);
+	server->confirm = g_new0(struct confirm_data, 1);
+	server->confirm->io = g_io_channel_ref(chan);
+	bacpy(&server->confirm->dst, &dst);
 
 	ret = btd_request_authorization(&src, &dst, HID_UUID,
 					auth_callback, server);
@@ -189,7 +272,8 @@ static void confirm_event_cb(GIOChannel *chan, gpointer user_data)
 
 	error("input: authorization for device %s failed", addr);
 
-	g_io_channel_unref(server->confirm);
+	g_io_channel_unref(server->confirm->io);
+	g_free(server->confirm);
 	server->confirm = NULL;
 
 drop:

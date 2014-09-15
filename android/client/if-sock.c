@@ -21,6 +21,7 @@
 
 #include "if-main.h"
 #include "pollhandler.h"
+#include "../hal-utils.h"
 
 const btsock_interface_t *if_sock = NULL;
 
@@ -34,6 +35,10 @@ ENDMAP
 static int listen_fd[MAX_LISTEN_FD];
 static int listen_fd_count;
 
+static const char * const uuids[] = {
+	"00001101", "00001105", "0000112f", NULL
+};
+
 /*
  * This function reads data from file descriptor and
  * prints it to the user
@@ -41,7 +46,8 @@ static int listen_fd_count;
 static void receive_from_client(struct pollfd *pollfd)
 {
 	char buf[16];
-	/* Buffer for lines:
+	/*
+	 * Buffer for lines:
 	 * 41 42 43 20 20 00 31 32 00 07 04 00 00 00 00 00 ABC  .12.....
 	 */
 	char outbuf[sizeof(buf) * 4 + 2];
@@ -129,6 +135,7 @@ static void read_accepted(int fd)
 
 	memset(&msg, 0, sizeof(msg));
 	memset(&iv, 0, sizeof(iv));
+	memset(cmsgbuf, 0, sizeof(cmsgbuf));
 
 	iv.iov_base = &cs;
 	iv.iov_len = sizeof(cs);
@@ -148,21 +155,19 @@ static void read_accepted(int fd)
 
 	for (cmsgptr = CMSG_FIRSTHDR(&msg);
 		cmsgptr != NULL; cmsgptr = CMSG_NXTHDR(&msg, cmsgptr)) {
-		int *descs;
 		int count;
 
 		if (cmsgptr->cmsg_level != SOL_SOCKET ||
 			cmsgptr->cmsg_type != SCM_RIGHTS)
 			continue;
 
-		descs = (int *) CMSG_DATA(cmsgptr);
+		memcpy(&accepted_fd, CMSG_DATA(cmsgptr), sizeof(accepted_fd));
 		count = ((cmsgptr->cmsg_len - CMSG_LEN(0)) / sizeof(int));
 
 		if (count != 1)
 			haltest_error("Failed to accept descriptors count=%d\n",
 									count);
 
-		accepted_fd = descs[0];
 		break;
 	}
 
@@ -183,7 +188,7 @@ static void client_connected(struct pollfd *pollfd)
 		read_accepted(pollfd->fd);
 }
 
-/** listen */
+/* listen */
 
 static void listen_c(int argc, const char **argv, enum_func *enum_func,
 								void **user)
@@ -191,6 +196,9 @@ static void listen_c(int argc, const char **argv, enum_func *enum_func,
 	if (argc == 3) {
 		*user = TYPE_ENUM(btsock_type_t);
 		*enum_func = enum_defines;
+	} else if (argc == 5) {
+		*user = (void *) uuids;
+		*enum_func = enum_strings;
 	}
 }
 
@@ -200,7 +208,7 @@ static void listen_p(int argc, const char **argv)
 	const char *service_name;
 	bt_uuid_t service_uuid;
 	int channel;
-	int sock_fd;
+	int sock_fd = -1;
 	int flags;
 
 	RETURN_IF_NULL(if_sock);
@@ -252,7 +260,7 @@ static void listen_p(int argc, const char **argv)
 	}
 }
 
-/** connect */
+/* connect */
 
 static void connect_c(int argc, const char **argv, enum_func *enum_func,
 								void **user)
@@ -262,6 +270,9 @@ static void connect_c(int argc, const char **argv, enum_func *enum_func,
 	} else if (argc == 4) {
 		*user = TYPE_ENUM(btsock_type_t);
 		*enum_func = enum_defines;
+	} else if (argc == 5) {
+		*user = (void *) uuids;
+		*enum_func = enum_strings;
 	}
 }
 
@@ -271,7 +282,7 @@ static void connect_p(int argc, const char **argv)
 	btsock_type_t type;
 	bt_uuid_t uuid;
 	int channel;
-	int sock_fd;
+	int sock_fd = -1;
 	int flags;
 
 	/* Address */
@@ -326,9 +337,9 @@ static void connect_p(int argc, const char **argv)
 /* Methods available in btsock_interface_t */
 static struct method methods[] = {
 	STD_METHODCH(listen,
-			"<sock_type> <srvc_name> <uuid> [<channle>] [<flags>]"),
+			"<sock_type> <srvc_name> <uuid> [<channel>] [<flags>]"),
 	STD_METHODCH(connect,
-			"<addr> <sock_type> <uuid> <channle> [<flags>]"),
+			"<addr> <sock_type> <uuid> <channel> [<flags>]"),
 	END_METHOD
 };
 

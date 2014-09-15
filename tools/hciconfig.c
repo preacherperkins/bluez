@@ -37,13 +37,15 @@
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
-#include "textfile.h"
-#include "csr.h"
+#include "src/textfile.h"
+#include "src/shared/util.h"
+#include "tools/csr.h"
 
 static struct hci_dev_info di;
 static int all;
@@ -74,12 +76,6 @@ static void print_dev_list(int ctl, int flags)
 		di.dev_id = (dr+i)->dev_id;
 		if (ioctl(ctl, HCIGETDEVINFO, (void *) &di) < 0)
 			continue;
-		if (hci_test_bit(HCI_RAW, &di.flags) &&
-				!bacmp(&di.bdaddr, BDADDR_ANY)) {
-			int dd = hci_open_dev(di.dev_id);
-			hci_read_bd_addr(dd, &di.bdaddr, 1000);
-			hci_close_dev(dd);
-		}
 		print_dev_info(ctl, &di);
 	}
 }
@@ -824,29 +820,37 @@ static char *get_minor_device_name(int major, int minor)
 		case 0:
 			break;
 		case 1:
-			strncat(cls_str, "Joystick", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Joystick",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		case 2:
-			strncat(cls_str, "Gamepad", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Gamepad",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		case 3:
-			strncat(cls_str, "Remote control", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Remote control",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		case 4:
-			strncat(cls_str, "Sensing device", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Sensing device",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		case 5:
-			strncat(cls_str, "Digitizer tablet", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Digitizer tablet",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		case 6:
-			strncat(cls_str, "Card reader", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "Card reader",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		default:
-			strncat(cls_str, "(reserved)", sizeof(cls_str) - strlen(cls_str));
+			strncat(cls_str, "(reserved)",
+					sizeof(cls_str) - strlen(cls_str) - 1);
 			break;
 		}
 		if (strlen(cls_str) > 0)
 			return cls_str;
+		break;
 	}
 	case 6:	/* imaging */
 		if (minor & 4)
@@ -1308,7 +1312,7 @@ static void cmd_inq_data(int ctl, int hdev, char *opt)
 				printf("\t%s service classes:",
 					type == 0x02 ? "Shortened" : "Complete");
 				for (i = 0; i < (len - 1) / 2; i++) {
-					uint16_t val = bt_get_le16((ptr + (i * 2)));
+					uint16_t val = get_le16((ptr + (i * 2)));
 					printf(" 0x%4.4x", val);
 				}
 				printf("\n");
@@ -2005,13 +2009,6 @@ int main(int argc, char *argv[])
 	if (ioctl(ctl, HCIGETDEVINFO, (void *) &di)) {
 		perror("Can't get device info");
 		exit(1);
-	}
-
-	if (hci_test_bit(HCI_RAW, &di.flags) &&
-			!bacmp(&di.bdaddr, BDADDR_ANY)) {
-		int dd = hci_open_dev(di.dev_id);
-		hci_read_bd_addr(dd, &di.bdaddr, 1000);
-		hci_close_dev(dd);
 	}
 
 	while (argc > 0) {

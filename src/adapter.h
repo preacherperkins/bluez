@@ -36,6 +36,7 @@
 #define INVALID_PASSKEY		0xffffffff
 
 struct btd_adapter;
+struct btd_device;
 
 struct btd_adapter *btd_adapter_get_default(void);
 bool btd_adapter_is_default(struct btd_adapter *adapter);
@@ -58,27 +59,17 @@ struct oob_handler {
 	void *user_data;
 };
 
-struct link_key_info {
-	bdaddr_t bdaddr;
-	unsigned char key[16];
-	uint8_t type;
-	uint8_t pin_len;
-};
-
-struct smp_ltk_info {
-	bdaddr_t bdaddr;
-	uint8_t bdaddr_type;
-	uint8_t authenticated;
-	uint8_t master;
-	uint8_t enc_size;
-	uint16_t ediv;
-	uint8_t rand[8];
-	uint8_t val[16];
-};
-
 int adapter_init(void);
 void adapter_cleanup(void);
 void adapter_shutdown(void);
+
+typedef void (*btd_disconnect_cb) (struct btd_device *device, uint8_t reason);
+void btd_add_disconnect_cb(btd_disconnect_cb func);
+void btd_remove_disconnect_cb(btd_disconnect_cb func);
+
+typedef void (*btd_conn_fail_cb) (struct btd_device *device, uint8_t status);
+void btd_add_conn_fail_cb(btd_conn_fail_cb func);
+void btd_remove_conn_fail_cb(btd_conn_fail_cb func);
 
 struct btd_adapter *adapter_find(const bdaddr_t *sba);
 struct btd_adapter *adapter_find_by_id(int id);
@@ -90,16 +81,19 @@ bool btd_adapter_get_connectable(struct btd_adapter *adapter);
 
 uint32_t btd_adapter_get_class(struct btd_adapter *adapter);
 const char *btd_adapter_get_name(struct btd_adapter *adapter);
-struct btd_device *adapter_get_device(struct btd_adapter *adapter,
+void btd_adapter_remove_device(struct btd_adapter *adapter,
+				struct btd_device *dev);
+struct btd_device *btd_adapter_get_device(struct btd_adapter *adapter,
 					const bdaddr_t *addr,
 					uint8_t addr_type);
 sdp_list_t *btd_adapter_get_services(struct btd_adapter *adapter);
 
-struct btd_device *adapter_find_device(struct btd_adapter *adapter,
-							const bdaddr_t *dst);
+struct btd_device *btd_adapter_find_device(struct btd_adapter *adapter,
+							const bdaddr_t *dst,
+							uint8_t dst_type);
 
 const char *adapter_get_path(struct btd_adapter *adapter);
-const bdaddr_t *adapter_get_address(struct btd_adapter *adapter);
+const bdaddr_t *btd_adapter_get_address(struct btd_adapter *adapter);
 int adapter_set_name(struct btd_adapter *adapter, const char *name);
 
 int adapter_service_add(struct btd_adapter *adapter, sdp_record_t *rec);
@@ -205,6 +199,14 @@ int adapter_connect_list_add(struct btd_adapter *adapter,
 					struct btd_device *device);
 void adapter_connect_list_remove(struct btd_adapter *adapter,
 						struct btd_device *device);
+void adapter_auto_connect_add(struct btd_adapter *adapter,
+					struct btd_device *device);
+void adapter_auto_connect_remove(struct btd_adapter *adapter,
+					struct btd_device *device);
+void adapter_whitelist_add(struct btd_adapter *adapter,
+						struct btd_device *dev);
+void adapter_whitelist_remove(struct btd_adapter *adapter,
+						struct btd_device *dev);
 
 void btd_adapter_set_oob_handler(struct btd_adapter *adapter,
 						struct oob_handler *handler);

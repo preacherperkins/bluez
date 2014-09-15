@@ -38,10 +38,11 @@
 #include <dbus/dbus.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
+#include "src/log.h"
+#include "src/dbus-common.h"
+#include "src/error.h"
+
 #include "player.h"
-#include "dbus-common.h"
-#include "error.h"
 
 #define MEDIA_PLAYER_INTERFACE "org.bluez.MediaPlayer1"
 #define MEDIA_FOLDER_INTERFACE "org.bluez.MediaFolder1"
@@ -392,7 +393,7 @@ static gboolean browsable_exists(const GDBusPropertyTable *property, void *data)
 {
 	struct media_player *mp = data;
 
-	return mp->scope != NULL;
+	return mp->folder != NULL;
 }
 
 static gboolean get_browsable(const GDBusPropertyTable *property,
@@ -401,7 +402,7 @@ static gboolean get_browsable(const GDBusPropertyTable *property,
 	struct media_player *mp = data;
 	dbus_bool_t value;
 
-	if (mp->scope == NULL)
+	if (mp->folder == NULL)
 		return FALSE;
 
 	DBG("%s", mp->browsable ? "true" : "false");
@@ -418,7 +419,7 @@ static gboolean searchable_exists(const GDBusPropertyTable *property,
 {
 	struct media_player *mp = data;
 
-	return mp->scope != NULL;
+	return mp->folder != NULL;
 }
 
 static gboolean get_searchable(const GDBusPropertyTable *property,
@@ -777,18 +778,15 @@ static DBusMessage *media_folder_search(DBusConnection *conn, DBusMessage *msg,
 	dbus_message_iter_init(msg, &iter);
 
 	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
-		return btd_error_failed(msg, strerror(EINVAL));
+		return btd_error_invalid_args(msg);
 
 	dbus_message_iter_get_basic(&iter, &string);
 
-	if (!mp->searchable || folder != mp->folder)
-		return btd_error_failed(msg, strerror(ENOTSUP));
+	if (!mp->searchable || folder != mp->folder || !cb->cbs->search)
+		return btd_error_not_supported(msg);
 
 	if (folder->msg != NULL)
 		return btd_error_failed(msg, strerror(EINVAL));
-
-	if (cb->cbs->search == NULL)
-		return btd_error_failed(msg, strerror(ENOTSUP));
 
 	err = cb->cbs->search(mp, string, cb->user_data);
 	if (err < 0)
@@ -807,7 +805,8 @@ static int parse_filters(struct media_player *player, DBusMessageIter *iter,
 	int ctype;
 
 	*start = 0;
-	*end = folder->number_of_items ? folder->number_of_items : UINT32_MAX;
+	*end = folder->number_of_items ? folder->number_of_items - 1 :
+								UINT32_MAX;
 
 	ctype = dbus_message_iter_get_arg_type(iter);
 	if (ctype != DBUS_TYPE_ARRAY)
@@ -996,14 +995,14 @@ static DBusMessage *media_folder_change_folder(DBusConnection *conn,
 	if (!dbus_message_get_args(msg, NULL,
 					DBUS_TYPE_OBJECT_PATH, &path,
 					DBUS_TYPE_INVALID))
-		return btd_error_failed(msg, strerror(EINVAL));
+		return btd_error_invalid_args(msg);
 
 	if (folder->msg != NULL)
 		return btd_error_failed(msg, strerror(EBUSY));
 
 	folder = media_player_find_folder(mp, path);
 	if (folder == NULL)
-		return btd_error_failed(msg, strerror(EINVAL));
+		return btd_error_invalid_args(msg);
 
 	if (mp->scope == folder)
 		return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
@@ -1014,8 +1013,16 @@ static DBusMessage *media_folder_change_folder(DBusConnection *conn,
 		return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 	}
 
+	/*
+	 * ChangePath can only navigate one level up/down so check if folder
+	 * is direct child or parent of the current folder otherwise fail.
+	 */
+	if (!g_slist_find(mp->folder->subfolders, folder) &&
+				!g_slist_find(folder->subfolders, mp->folder))
+		return btd_error_invalid_args(msg);
+
 	if (cb->cbs->change_folder == NULL)
-		return btd_error_failed(msg, strerror(ENOTSUP));
+		return btd_error_not_supported(msg);
 
 	err = cb->cbs->change_folder(mp, folder->item->name, folder->item->uid,
 								cb->user_data);
@@ -1471,11 +1478,8 @@ static DBusMessage *media_item_play(DBusConnection *conn, DBusMessage *msg,
 	struct player_callback *cb = mp->cb;
 	int err;
 
-	if (!item->playable)
-		return btd_error_failed(msg, strerror(ENOTSUP));
-
-	if (cb->cbs->play_item == NULL)
-		return btd_error_failed(msg, strerror(ENOTSUP));
+	if (!item->playable || !cb->cbs->play_item)
+		return btd_error_not_supported(msg);
 
 	err = cb->cbs->play_item(mp, item->path, item->uid, cb->user_data);
 	if (err < 0)
@@ -1492,11 +1496,8 @@ static DBusMessage *media_item_add_to_nowplaying(DBusConnection *conn,
 	struct player_callback *cb = mp->cb;
 	int err;
 
-	if (!item->playable)
-		return btd_error_failed(msg, strerror(ENOTSUP));
-
-	if (cb->cbs->play_item == NULL)
-		return btd_error_failed(msg, strerror(ENOTSUP));
+	if (!item->playable || !cb->cbs->play_item)
+		return btd_error_not_supported(msg);
 
 	err = cb->cbs->add_to_nowplaying(mp, item->path, item->uid,
 							cb->user_data);

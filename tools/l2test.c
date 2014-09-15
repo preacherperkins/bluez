@@ -28,6 +28,7 @@
 #endif
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -46,7 +47,12 @@
 #include <bluetooth/hci_lib.h>
 #include <bluetooth/l2cap.h>
 
+#include "src/shared/util.h"
+
 #define NIBBLE_TO_ASCII(c)  ((c) < 0x0a ? (c) + 0x30 : (c) + 0x57)
+
+#define BREDR_DEFAULT_PSM	0x1011
+#define LE_DEFAULT_PSM		0x0080
 
 /* Test modes */
 enum {
@@ -87,7 +93,7 @@ static long buffer_size = 2048;
 
 /* Default addr and psm and cid */
 static bdaddr_t bdaddr;
-static unsigned short psm = 0x1011;
+static unsigned short psm = 0;
 static unsigned short cid = 0;
 
 /* Default number of frames to send (-1 = infinite) */
@@ -258,6 +264,37 @@ static void hexdump(unsigned char *s, unsigned long l)
 	}
 }
 
+static int getopts(int sk, struct l2cap_options *opts, bool connected)
+{
+	socklen_t optlen;
+	int err;
+
+	memset(opts, 0, sizeof(*opts));
+
+	if (bdaddr_type == BDADDR_BREDR) {
+		optlen = sizeof(*opts);
+		return getsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, opts, &optlen);
+	}
+
+	optlen = sizeof(opts->imtu);
+	err = getsockopt(sk, SOL_BLUETOOTH, BT_RCVMTU, &opts->imtu, &optlen);
+	if (err < 0 || !connected)
+		return err;
+
+	optlen = sizeof(opts->omtu);
+	return getsockopt(sk, SOL_BLUETOOTH, BT_SNDMTU, &opts->omtu, &optlen);
+}
+
+static int setopts(int sk, struct l2cap_options *opts)
+{
+	if (bdaddr_type == BDADDR_BREDR)
+		return setsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, opts,
+								sizeof(*opts));
+
+	return setsockopt(sk, SOL_BLUETOOTH, BT_RCVMTU, &opts->imtu,
+							sizeof(opts->imtu));
+}
+
 static int do_connect(char *svr)
 {
 	struct sockaddr_l2 addr;
@@ -290,12 +327,9 @@ static int do_connect(char *svr)
 	}
 
 	/* Get default options */
-	memset(&opts, 0, sizeof(opts));
-	optlen = sizeof(opts);
-
-	if (getsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &opts, &optlen) < 0) {
+	if (getopts(sk, &opts, false) < 0) {
 		syslog(LOG_ERR, "Can't get default L2CAP options: %s (%d)",
-							strerror(errno), errno);
+						strerror(errno), errno);
 		goto error;
 	}
 
@@ -308,7 +342,7 @@ static int do_connect(char *svr)
 	opts.txwin_size = txwin_size;
 	opts.max_tx = max_transmit;
 
-	if (setsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &opts, sizeof(opts)) < 0) {
+	if (setopts(sk, &opts) < 0) {
 		syslog(LOG_ERR, "Can't set L2CAP options: %s (%d)",
 							strerror(errno), errno);
 		goto error;
@@ -400,10 +434,7 @@ static int do_connect(char *svr)
 	}
 
 	/* Get current options */
-	memset(&opts, 0, sizeof(opts));
-	optlen = sizeof(opts);
-
-	if (getsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &opts, &optlen) < 0) {
+	if (getopts(sk, &opts, true) < 0) {
 		syslog(LOG_ERR, "Can't get L2CAP options: %s (%d)",
 							strerror(errno), errno);
 		goto error;
@@ -531,10 +562,7 @@ static void do_listen(void (*handler)(int sk))
 	}
 
 	/* Get default options */
-	memset(&opts, 0, sizeof(opts));
-	optlen = sizeof(opts);
-
-	if (getsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &opts, &optlen) < 0) {
+	if (getopts(sk, &opts, false) < 0) {
 		syslog(LOG_ERR, "Can't get default L2CAP options: %s (%d)",
 							strerror(errno), errno);
 		goto error;
@@ -550,7 +578,7 @@ static void do_listen(void (*handler)(int sk))
 	opts.txwin_size = txwin_size;
 	opts.max_tx = max_transmit;
 
-	if (setsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &opts, sizeof(opts)) < 0) {
+	if (setopts(sk, &opts) < 0) {
 		syslog(LOG_ERR, "Can't set L2CAP options: %s (%d)",
 							strerror(errno), errno);
 		goto error;
@@ -629,10 +657,7 @@ static void do_listen(void (*handler)(int sk))
 		}
 
 		/* Get current options */
-		memset(&opts, 0, sizeof(opts));
-		optlen = sizeof(opts);
-
-		if (getsockopt(nsk, SOL_L2CAP, L2CAP_OPTIONS, &opts, &optlen) < 0) {
+		if (getopts(nsk, &opts, true) < 0) {
 			syslog(LOG_ERR, "Can't get L2CAP options: %s (%d)",
 							strerror(errno), errno);
 			if (!defer_setup) {
@@ -759,7 +784,7 @@ static void dump_mode(int sk)
 		data_size = imtu;
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -819,7 +844,7 @@ static void recv_mode(int sk)
 		data_size = imtu;
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -886,7 +911,7 @@ static void recv_mode(int sk)
 			}
 
 			/* Check sequence */
-			sq = bt_get_le32(buf);
+			sq = get_le32(buf);
 			if (seq != sq) {
 				syslog(LOG_INFO, "seq missmatch: %d -> %d", seq, sq);
 				seq = sq;
@@ -894,7 +919,7 @@ static void recv_mode(int sk)
 			seq++;
 
 			/* Check length */
-			l = bt_get_le16(buf + 4);
+			l = get_le16(buf + 4);
 			if (len != l) {
 				syslog(LOG_INFO, "size missmatch: %d -> %d", len, l);
 				continue;
@@ -953,8 +978,8 @@ static void do_send(int sk)
 
 	seq = 0;
 	while ((num_frames == -1) || (num_frames-- > 0)) {
-		bt_put_le32(seq, buf);
-		bt_put_le16(data_size, buf + 4);
+		put_le32(seq, buf);
+		put_le16(data_size, buf + 4);
 
 		seq++;
 
@@ -1523,6 +1548,13 @@ int main(int argc, char *argv[])
 			usage();
 			exit(1);
 		}
+	}
+
+	if (!psm) {
+		if (bdaddr_type == BDADDR_BREDR)
+			psm = BREDR_DEFAULT_PSM;
+		else
+			psm = LE_DEFAULT_PSM;
 	}
 
 	if (need_addr && !(argc - optind)) {

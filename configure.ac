@@ -1,5 +1,5 @@
 AC_PREREQ(2.60)
-AC_INIT(bluez, 5.10)
+AC_INIT(bluez, 5.21)
 
 AM_INIT_AUTOMAKE([foreign subdir-objects color-tests silent-rules
 					tar-pax no-dist-gzip dist-xz])
@@ -61,8 +61,8 @@ if (test "${enable_threads}" = "yes"); then
 	GLIB_LIBS="$GLIB_LIBS $GTHREAD_LIBS"
 fi
 
-PKG_CHECK_MODULES(DBUS, dbus-1 >= 1.4, dummy=yes,
-				AC_MSG_ERROR(D-Bus >= 1.4 is required))
+PKG_CHECK_MODULES(DBUS, dbus-1 >= 1.6, dummy=yes,
+				AC_MSG_ERROR(D-Bus >= 1.6 is required))
 AC_SUBST(DBUS_CFLAGS)
 AC_SUBST(DBUS_LIBS)
 
@@ -124,8 +124,8 @@ AM_CONDITIONAL(MONITOR, test "${enable_monitor}" != "no")
 AC_ARG_ENABLE(udev, AC_HELP_STRING([--disable-udev],
 		[disable udev device support]), [enable_udev=${enableval}])
 if (test "${enable_tools}" != "no" && test "${enable_udev}" != "no"); then
-	PKG_CHECK_MODULES(UDEV, libudev >= 143, dummy=yes,
-				AC_MSG_ERROR(libudev >= 143 is required))
+	PKG_CHECK_MODULES(UDEV, libudev >= 172, dummy=yes,
+				AC_MSG_ERROR(libudev >= 172 is required))
 	AC_SUBST(UDEV_CFLAGS)
 	AC_SUBST(UDEV_LIBS)
 	AC_CHECK_LIB(udev, udev_hwdb_new,
@@ -210,10 +210,20 @@ AC_ARG_ENABLE(datafiles, AC_HELP_STRING([--disable-datafiles],
 					[enable_datafiles=${enableval}])
 AM_CONDITIONAL(DATAFILES, test "${enable_datafiles}" != "no")
 
+AC_ARG_ENABLE(manpages, AC_HELP_STRING([--enable-manpages],
+			[enable building of manual pages]),
+					[enable_manpages=${enableval}])
+AM_CONDITIONAL(MANPAGES, test "${enable_manpages}" = "yes")
+
 AC_ARG_ENABLE(experimental, AC_HELP_STRING([--enable-experimental],
 			[enable experimental plugins (SAP, NFC, ...)]),
 					[enable_experimental=${enableval}])
 AM_CONDITIONAL(EXPERIMENTAL, test "${enable_experimental}" = "yes")
+
+AC_ARG_ENABLE(sixaxis, AC_HELP_STRING([--enable-sixaxis],
+		[enable sixaxis plugin]), [enable_sixaxis=${enableval}])
+AM_CONDITIONAL(SIXAXIS, test "${enable_sixaxis}" = "yes" &&
+					 test "${enable_udev}" != "no")
 
 if (test "${prefix}" = "NONE"); then
 	dnl no prefix and no localstatedir, so default to /var
@@ -246,4 +256,21 @@ AC_ARG_ENABLE(android, AC_HELP_STRING([--enable-android],
 					[enable_android=${enableval}])
 AM_CONDITIONAL(ANDROID, test "${enable_android}" = "yes")
 
-AC_OUTPUT(Makefile src/bluetoothd.8 lib/bluez.pc)
+if (test "${enable_android}" = "yes"); then
+	PKG_CHECK_MODULES(SBC, sbc >= 1.2, dummy=yes,
+					AC_MSG_ERROR(SBC library >= 1.2 is required))
+	AC_SUBST(SBC_CFLAGS)
+	AC_SUBST(SBC_LIBS)
+fi
+
+if (test "${enable_android}" = "yes"); then
+	PKG_CHECK_MODULES(SPEEXDSP, speexdsp >= 1.2, dummy=yes,
+					AC_MSG_ERROR(SPEEXDSP library >= 1.2 is required))
+	AC_SUBST(SPEEXDSP_CFLAGS)
+	AC_SUBST(SPEEXDSP_LIBS)
+fi
+
+AC_DEFINE_UNQUOTED(ANDROID_STORAGEDIR, "${storagedir}/android",
+			[Directory for the Android daemon storage files])
+
+AC_OUTPUT(Makefile src/bluetoothd.8 lib/bluez.pc doc/Makefile)

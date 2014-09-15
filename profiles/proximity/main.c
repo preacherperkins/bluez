@@ -31,10 +31,9 @@
 #include <glib.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
-#include "plugin.h"
+#include "src/log.h"
+#include "src/plugin.h"
 #include "manager.h"
-#include "hcid.h"
 
 static GKeyFile *config = NULL;
 

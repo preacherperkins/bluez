@@ -39,10 +39,10 @@
 #include <bluetooth/sdp_lib.h>
 
 #include <glib.h>
-#include <btio/btio.h>
 
-#include "log.h"
+#include "src/log.h"
 
+#include "btio/btio.h"
 #include "lib/uuid.h"
 #include "src/adapter.h"
 #include "src/device.h"
@@ -393,9 +393,6 @@ struct avdtp {
 	struct btd_device *device;
 
 	avdtp_session_state_t state;
-
-	/* True if the entire device is being disconnected */
-	gboolean device_disconnect;
 
 	guint auth_id;
 
@@ -1199,11 +1196,6 @@ static void set_disconnect_timer(struct avdtp *session)
 {
 	if (session->dc_timer)
 		remove_disconnect_timer(session);
-
-	if (session->device_disconnect) {
-		session->dc_timer = g_idle_add(disconnect_timeout, session);
-		return;
-	}
 
 	session->dc_timer = g_timeout_add_seconds(DISCONNECT_TIMEOUT,
 						disconnect_timeout,
@@ -2475,7 +2467,8 @@ static void avdtp_confirm_cb(GIOChannel *chan, gpointer data)
 
 	DBG("AVDTP: incoming connect from %s", address);
 
-	device = adapter_find_device(adapter_find(&src), &dst);
+	device = btd_adapter_find_device(adapter_find(&src), &dst,
+								BDADDR_BREDR);
 	if (!device)
 		goto drop;
 
@@ -2531,11 +2524,13 @@ static GIOChannel *l2cap_connect(struct avdtp *session)
 {
 	GError *err = NULL;
 	GIOChannel *io;
+	const bdaddr_t *src;
+
+	src = btd_adapter_get_address(session->server->adapter);
 
 	io = bt_io_connect(avdtp_connect_cb, session,
 				NULL, &err,
-				BT_IO_OPT_SOURCE_BDADDR,
-				adapter_get_address(session->server->adapter),
+				BT_IO_OPT_SOURCE_BDADDR, src,
 				BT_IO_OPT_DEST_BDADDR,
 				device_get_address(session->device),
 				BT_IO_OPT_PSM, AVDTP_PSM,
@@ -3183,8 +3178,8 @@ struct avdtp_service_capability *avdtp_stream_get_codec(
 	return NULL;
 }
 
-gboolean avdtp_stream_has_capability(struct avdtp_stream *stream,
-				struct avdtp_service_capability *cap)
+static gboolean avdtp_stream_has_capability(struct avdtp_stream *stream,
+					struct avdtp_service_capability *cap)
 {
 	GSList *l;
 	struct avdtp_service_capability *stream_cap;
@@ -3219,7 +3214,16 @@ gboolean avdtp_stream_has_capabilities(struct avdtp_stream *stream,
 struct avdtp_remote_sep *avdtp_stream_get_remote_sep(
 						struct avdtp_stream *stream)
 {
-	return avdtp_get_remote_sep(stream->session, stream->rseid);
+	GSList *l;
+
+	for (l = stream->session->seps; l; l = l->next) {
+		struct avdtp_remote_sep *sep = l->data;
+
+		if (sep->seid == stream->rseid)
+			return sep;
+	}
+
+	return NULL;
 }
 
 gboolean avdtp_stream_get_transport(struct avdtp_stream *stream, int *sock,
@@ -3268,44 +3272,9 @@ static int process_queue(struct avdtp *session)
 	return send_req(session, FALSE, req);
 }
 
-struct avdtp_remote_sep *avdtp_get_remote_sep(struct avdtp *session,
-						uint8_t seid)
-{
-	GSList *l;
-
-	for (l = session->seps; l; l = l->next) {
-		struct avdtp_remote_sep *sep = l->data;
-
-		if (sep->seid == seid)
-			return sep;
-	}
-
-	return NULL;
-}
-
-uint8_t avdtp_get_seid(struct avdtp_remote_sep *sep)
-{
-	return sep->seid;
-}
-
-uint8_t avdtp_get_type(struct avdtp_remote_sep *sep)
-{
-	return sep->type;
-}
-
 struct avdtp_service_capability *avdtp_get_codec(struct avdtp_remote_sep *sep)
 {
 	return sep->codec;
-}
-
-gboolean avdtp_get_delay_reporting(struct avdtp_remote_sep *sep)
-{
-	return sep->delay_reporting;
-}
-
-struct avdtp_stream *avdtp_get_stream(struct avdtp_remote_sep *sep)
-{
-	return sep->stream;
 }
 
 struct avdtp_service_capability *avdtp_service_cap_new(uint8_t category,
@@ -3683,6 +3652,46 @@ int avdtp_delay_report(struct avdtp *session, struct avdtp_stream *stream,
 							&req, sizeof(req));
 }
 
+static GIOChannel *avdtp_server_socket(const bdaddr_t *src, gboolean master)
+{
+	GError *err = NULL;
+	GIOChannel *io;
+
+	io = bt_io_listen(NULL, avdtp_confirm_cb,
+				NULL, NULL, &err,
+				BT_IO_OPT_SOURCE_BDADDR, src,
+				BT_IO_OPT_PSM, AVDTP_PSM,
+				BT_IO_OPT_SEC_LEVEL, BT_IO_SEC_MEDIUM,
+				BT_IO_OPT_MASTER, master,
+				BT_IO_OPT_INVALID);
+	if (!io) {
+		error("%s", err->message);
+		g_error_free(err);
+	}
+
+	return io;
+}
+
+static struct avdtp_server *avdtp_server_init(struct btd_adapter *adapter)
+{
+	struct avdtp_server *server;
+
+	server = g_new0(struct avdtp_server, 1);
+
+	server->io = avdtp_server_socket(btd_adapter_get_address(adapter),
+									TRUE);
+	if (!server->io) {
+		g_free(server);
+		return NULL;
+	}
+
+	server->adapter = btd_adapter_ref(adapter);
+
+	servers = g_slist_append(servers, server);
+
+	return server;
+}
+
 struct avdtp_local_sep *avdtp_register_sep(struct btd_adapter *adapter,
 						uint8_t type,
 						uint8_t media_type,
@@ -3696,8 +3705,11 @@ struct avdtp_local_sep *avdtp_register_sep(struct btd_adapter *adapter,
 	struct avdtp_local_sep *sep;
 
 	server = find_server(servers, adapter);
-	if (!server)
-		return NULL;
+	if (!server) {
+		server = avdtp_server_init(adapter);
+		if (!server)
+			return NULL;
+	}
 
 	if (g_slist_length(server->seps) > MAX_SEID)
 		return NULL;
@@ -3722,6 +3734,18 @@ struct avdtp_local_sep *avdtp_register_sep(struct btd_adapter *adapter,
 	return sep;
 }
 
+static void avdtp_server_destroy(struct avdtp_server *server)
+{
+	g_slist_free_full(server->sessions, avdtp_free);
+
+	servers = g_slist_remove(servers, server);
+
+	g_io_channel_shutdown(server->io, TRUE, NULL);
+	g_io_channel_unref(server->io);
+	btd_adapter_unref(server->adapter);
+	g_free(server);
+}
+
 int avdtp_unregister_sep(struct avdtp_local_sep *sep)
 {
 	struct avdtp_server *server;
@@ -3740,27 +3764,12 @@ int avdtp_unregister_sep(struct avdtp_local_sep *sep)
 
 	g_free(sep);
 
+	if (server->seps)
+		return 0;
+
+	avdtp_server_destroy(server);
+
 	return 0;
-}
-
-static GIOChannel *avdtp_server_socket(const bdaddr_t *src, gboolean master)
-{
-	GError *err = NULL;
-	GIOChannel *io;
-
-	io = bt_io_listen(NULL, avdtp_confirm_cb,
-				NULL, NULL, &err,
-				BT_IO_OPT_SOURCE_BDADDR, src,
-				BT_IO_OPT_PSM, AVDTP_PSM,
-				BT_IO_OPT_SEC_LEVEL, BT_IO_SEC_MEDIUM,
-				BT_IO_OPT_MASTER, master,
-				BT_IO_OPT_INVALID);
-	if (!io) {
-		error("%s", err->message);
-		g_error_free(err);
-	}
-
-	return io;
 }
 
 const char *avdtp_strerror(struct avdtp_error *err)
@@ -3823,51 +3832,9 @@ struct btd_device *avdtp_get_device(struct avdtp *session)
 	return session->device;
 }
 
-int avdtp_init(struct btd_adapter *adapter)
-{
-	struct avdtp_server *server;
-
-	server = g_new0(struct avdtp_server, 1);
-
-	server->io = avdtp_server_socket(adapter_get_address(adapter), TRUE);
-	if (!server->io) {
-		g_free(server);
-		return -1;
-	}
-
-	server->adapter = btd_adapter_ref(adapter);
-
-	servers = g_slist_append(servers, server);
-
-	return 0;
-}
-
-void avdtp_exit(struct btd_adapter *adapter)
-{
-	struct avdtp_server *server;
-
-	server = find_server(servers, adapter);
-	if (!server)
-		return;
-
-	g_slist_free_full(server->sessions, avdtp_free);
-
-	servers = g_slist_remove(servers, server);
-
-	g_io_channel_shutdown(server->io, TRUE, NULL);
-	g_io_channel_unref(server->io);
-	btd_adapter_unref(server->adapter);
-	g_free(server);
-}
-
 gboolean avdtp_has_stream(struct avdtp *session, struct avdtp_stream *stream)
 {
 	return g_slist_find(session->streams, stream) ? TRUE : FALSE;
-}
-
-void avdtp_set_device_disconnect(struct avdtp *session, gboolean dev_dc)
-{
-	session->device_disconnect = dev_dc;
 }
 
 unsigned int avdtp_add_state_cb(struct btd_device *dev,

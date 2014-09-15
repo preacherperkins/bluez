@@ -40,6 +40,8 @@
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/sco.h>
 
+#include "src/shared/util.h"
+
 /* Test modes */
 enum {
 	SEND,
@@ -255,7 +257,7 @@ static void dump_mode(int sk)
 							strerror(errno), errno);
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -283,7 +285,7 @@ static void recv_mode(int sk)
 							strerror(errno), errno);
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -345,8 +347,8 @@ static void send_mode(char *svr)
 
 	seq = 0;
 	while (1) {
-		bt_put_le32(seq, buf);
-		bt_put_le16(data_size, buf + 4);
+		put_le32(seq, buf);
+		put_le16(data_size, buf + 4);
 
 		seq++;
 

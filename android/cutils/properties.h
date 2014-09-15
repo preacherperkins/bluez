@@ -1,38 +1,94 @@
 /*
- * Copyright (C) 2006 The Android Open Source Project
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ *  BlueZ - Bluetooth protocol stack for Linux
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *  Copyright (C) 2013  Intel Corporation. All rights reserved.
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
+ *
+ *  This library is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
-#ifndef __CUTILS_PROPERTIES_H
-#define __CUTILS_PROPERTIES_H
-
+#include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#define PROPERTY_VALUE_MAX 32
+
+#define BLUETOOTH_MODE_PROPERTY_NAME "persist.sys.bluetooth.mode"
+#define BLUETOOTH_MODE_PROPERTY_HANDSFREE "persist.sys.bluetooth.handsfree"
+
+static inline int property_get(const char *key, char *value,
+						const char *default_value)
+{
+	const char *prop = NULL;
+
+	if (!strcmp(key, BLUETOOTH_MODE_PROPERTY_NAME))
+		prop = getenv("BLUETOOTH_MODE");
+
+	if (!strcmp(key, BLUETOOTH_MODE_PROPERTY_HANDSFREE))
+		prop = getenv("BLUETOOTH_HANDSFREE_MODE");
+
+	if (!prop)
+		prop = default_value;
+
+	if (prop) {
+		strncpy(value, prop, PROPERTY_VALUE_MAX);
+
+		value[PROPERTY_VALUE_MAX - 1] = '\0';
+
+		return strlen(value);
+	}
+
+	return 0;
+}
 
 /* property_set: returns 0 on success, < 0 on failure
 */
 static inline int property_set(const char *key, const char *value)
 {
-	return setenv(key, value, 0);
-}
+	static const char SYSTEM_SOCKET_PATH[] = "\0android_system";
 
-#ifdef __cplusplus
-}
-#endif
+	struct sockaddr_un addr;
+	char msg[256];
+	int fd, len;
 
-#endif
+	fd = socket(PF_LOCAL, SOCK_DGRAM, 0);
+	if (fd < 0)
+		return -1;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	memcpy(addr.sun_path, SYSTEM_SOCKET_PATH, sizeof(SYSTEM_SOCKET_PATH));
+
+	if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+		close(fd);
+		return 0;
+	}
+
+	len = snprintf(msg, sizeof(msg), "%s=%s", key, value);
+
+	if (send(fd, msg, len + 1, 0) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	close(fd);
+
+	return 0;
+}

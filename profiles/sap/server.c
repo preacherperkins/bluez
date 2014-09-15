@@ -35,11 +35,12 @@
 
 #include "lib/uuid.h"
 #include "btio/btio.h"
-#include "adapter.h"
-#include "sdpd.h"
-#include "log.h"
-#include "error.h"
-#include "dbus-common.h"
+#include "src/adapter.h"
+#include "src/sdpd.h"
+#include "src/log.h"
+#include "src/error.h"
+#include "src/dbus-common.h"
+#include "src/shared/util.h"
 #include "sap.h"
 #include "server.h"
 
@@ -312,7 +313,7 @@ static void connect_req(struct sap_server *server,
 
 	stop_guard_timer(server);
 
-	maxmsgsize = bt_get_be16(&param->val);
+	maxmsgsize = get_be16(&param->val);
 
 	DBG("Connect MaxMsgSize: 0x%04x", maxmsgsize);
 
@@ -667,7 +668,7 @@ int sap_connect_rsp(void *sap_device, uint8_t status)
 		param = (struct sap_parameter *) &buf[size];
 		param->id = SAP_PARAM_ID_MAX_MSG_SIZE;
 		param->len = htons(SAP_PARAM_ID_MAX_MSG_SIZE_LEN);
-		bt_put_be16(SAP_BUF_SIZE, &param->val);
+		put_be16(SAP_BUF_SIZE, &param->val);
 		size += PARAMETER_SIZE(SAP_PARAM_ID_MAX_MSG_SIZE_LEN);
 
 		/* fall */
@@ -1372,7 +1373,8 @@ int sap_server_register(struct btd_adapter *adapter)
 
 	io = bt_io_listen(NULL, connect_confirm_cb, server,
 			NULL, &gerr,
-			BT_IO_OPT_SOURCE_BDADDR, adapter_get_address(adapter),
+			BT_IO_OPT_SOURCE_BDADDR,
+			btd_adapter_get_address(adapter),
 			BT_IO_OPT_CHANNEL, SAP_SERVER_CHANNEL,
 			BT_IO_OPT_SEC_LEVEL, BT_IO_SEC_HIGH,
 			BT_IO_OPT_MASTER, TRUE,
