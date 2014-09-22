@@ -44,6 +44,7 @@ int aui_set_powered_blocking(struct btd_adapter *adapter)
                 }
                 fprintf(stderr, "Can't init device hci%d: %s (%d)\n",
                                                 dev_id, strerror(errno), errno);
+                close(ctl);
                 return -1;
         }
 

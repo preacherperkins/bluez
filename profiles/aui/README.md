@@ -40,6 +40,21 @@ Here are the defines for the AUI UUIDs.
 #define AUI_DEVID_UUID    "a8bb3a1f-0afa-463a-83ca-a10054087787"
 ```
 
+Here is the enumeration definition for actions.
+
+```c
+enum {
+	NOP                = 255,
+	VOL_UP             = 10,
+	VOL_DOWN           = 11,
+	NEXT_TRACK         = 12,
+	PREV_TRACK         = 13,
+	NEXT_SET           = 14,
+	PREV_SET           = 15,
+	PLAY_PAUSE_TOGGLE  = 16
+};
+```
+
 When a client writes to the AUI_RCV_UUID characteristic, the AUI service emits a
 DBUS signal
 
@@ -59,20 +74,7 @@ _org.bluez.AuiManager1_
 RemoteCmd has a type "y" (unsigned 8-bit integer).  When a client updates the
 AUI_RCV_UUID value, bluez emits a PropertyChanged signal with the new value.
 
-This value should match the following enumeration:
-
-```c
-enum {
-	NOP                = 255,
-	VOL_UP             = 10,
-	VOL_DOWN           = 11,
-	NEXT_TRACK         = 12,
-	PREV_TRACK         = 13,
-	NEXT_SET           = 14,
-	PREV_SET           = 15,
-	PLAY_PAUSE_TOGGLE  = 16
-};
-```
+This value should match the enumeration described above:
 
 And here's a sample output when using `dbus-monitor --system`:
 
