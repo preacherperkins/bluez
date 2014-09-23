@@ -222,6 +222,9 @@ struct bthost *bthost_create(void)
 
 	memset(bthost, 0, sizeof(*bthost));
 
+	/* Set defaults */
+	bthost->io_capability = 0x03;
+
 	return bthost;
 }
 
@@ -445,11 +448,12 @@ void bthost_set_send_handler(struct bthost *bthost, bthost_send_func handler,
 	bthost->send_data = user_data;
 }
 
-static void queue_command(struct bthost *bthost, const void *data,
-								uint16_t len)
+static void queue_command(struct bthost *bthost, const struct iovec *iov,
+								int iovlen)
 {
 	struct cmd_queue *cmd_q = &bthost->cmd_q;
 	struct cmd *cmd;
+	int i;
 
 	cmd = malloc(sizeof(*cmd));
 	if (!cmd)
@@ -457,8 +461,10 @@ static void queue_command(struct bthost *bthost, const void *data,
 
 	memset(cmd, 0, sizeof(*cmd));
 
-	memcpy(cmd->data, data, len);
-	cmd->len = len;
+	for (i = 0; i < iovlen; i++) {
+		memcpy(cmd->data + cmd->len, iov[i].iov_base, iov[i].iov_len);
+		cmd->len += iov[i].iov_len;
+	}
 
 	if (cmd_q->tail)
 		cmd_q->tail->next = cmd;
@@ -469,45 +475,47 @@ static void queue_command(struct bthost *bthost, const void *data,
 	cmd_q->tail = cmd;
 }
 
-static void send_packet(struct bthost *bthost, const void *data, uint16_t len)
+static void send_packet(struct bthost *bthost, const struct iovec *iov,
+								int iovlen)
 {
 	if (!bthost->send_handler)
 		return;
 
-	bthost->send_handler(data, len, bthost->send_data);
+	bthost->send_handler(iov, iovlen, bthost->send_data);
 }
 
 static void send_acl(struct bthost *bthost, uint16_t handle, uint16_t cid,
 						const void *data, uint16_t len)
 {
-	struct bt_hci_acl_hdr *acl_hdr;
-	struct bt_l2cap_hdr *l2_hdr;
-	uint16_t pkt_len;
-	void *pkt_data;
+	struct bt_hci_acl_hdr acl_hdr;
+	struct bt_l2cap_hdr l2_hdr;
+	uint8_t pkt = BT_H4_ACL_PKT;
+	struct iovec iov[4];
 
-	pkt_len = 1 + sizeof(*acl_hdr) + sizeof(*l2_hdr) + len;
+	iov[0].iov_base = &pkt;
+	iov[0].iov_len = sizeof(pkt);
 
-	pkt_data = malloc(pkt_len);
-	if (!pkt_data)
+	acl_hdr.handle = acl_handle_pack(handle, 0);
+	acl_hdr.dlen = cpu_to_le16(len + sizeof(l2_hdr));
+
+	iov[1].iov_base = &acl_hdr;
+	iov[1].iov_len = sizeof(acl_hdr);
+
+	l2_hdr.cid = cpu_to_le16(cid);
+	l2_hdr.len = cpu_to_le16(len);
+
+	iov[2].iov_base = &l2_hdr;
+	iov[2].iov_len = sizeof(l2_hdr);
+
+	if (len == 0) {
+		send_packet(bthost, iov, 3);
 		return;
+	}
 
-	((uint8_t *) pkt_data)[0] = BT_H4_ACL_PKT;
+	iov[3].iov_base = (void *) data;
+	iov[3].iov_len = len;
 
-	acl_hdr = pkt_data + 1;
-	acl_hdr->handle = acl_handle_pack(handle, 0);
-	acl_hdr->dlen = cpu_to_le16(len + sizeof(*l2_hdr));
-
-	l2_hdr = pkt_data + 1 + sizeof(*acl_hdr);
-	l2_hdr->cid = cpu_to_le16(cid);
-	l2_hdr->len = cpu_to_le16(len);
-
-	if (len > 0)
-		memcpy(pkt_data + 1 + sizeof(*acl_hdr) + sizeof(*l2_hdr),
-								data, len);
-
-	send_packet(bthost, pkt_data, pkt_len);
-
-	free(pkt_data);
+	send_packet(bthost, iov, 4);
 }
 
 static uint8_t l2cap_sig_send(struct bthost *bthost, struct btconn *conn,
@@ -633,33 +641,30 @@ bool bthost_l2cap_req(struct bthost *bthost, uint16_t handle, uint8_t code,
 static void send_command(struct bthost *bthost, uint16_t opcode,
 						const void *data, uint8_t len)
 {
-	struct bt_hci_cmd_hdr *hdr;
-	uint16_t pkt_len;
-	void *pkt_data;
+	struct bt_hci_cmd_hdr hdr;
+	uint8_t pkt = BT_H4_CMD_PKT;
+	struct iovec iov[3];
 
-	pkt_len = 1 + sizeof(*hdr) + len;
+	iov[0].iov_base = &pkt;
+	iov[0].iov_len = sizeof(pkt);
 
-	pkt_data = malloc(pkt_len);
-	if (!pkt_data)
-		return;
+	hdr.opcode = cpu_to_le16(opcode);
+	hdr.plen = len;
 
-	((uint8_t *) pkt_data)[0] = BT_H4_CMD_PKT;
+	iov[1].iov_base = &hdr;
+	iov[1].iov_len = sizeof(hdr);
 
-	hdr = pkt_data + 1;
-	hdr->opcode = cpu_to_le16(opcode);
-	hdr->plen = len;
-
-	if (len > 0)
-		memcpy(pkt_data + 1 + sizeof(*hdr), data, len);
-
-	if (bthost->ncmd) {
-		send_packet(bthost, pkt_data, pkt_len);
-		bthost->ncmd--;
-	} else {
-		queue_command(bthost, pkt_data, pkt_len);
+	if (len > 0) {
+		iov[2].iov_base = (void *) data;
+		iov[2].iov_len = len;
 	}
 
-	free(pkt_data);
+	if (bthost->ncmd) {
+		send_packet(bthost, iov, len > 0 ? 3 : 2);
+		bthost->ncmd--;
+	} else {
+		queue_command(bthost, iov, len > 0 ? 3 : 2);
+	}
 }
 
 static void next_cmd(struct bthost *bthost)
@@ -667,6 +672,7 @@ static void next_cmd(struct bthost *bthost)
 	struct cmd_queue *cmd_q = &bthost->cmd_q;
 	struct cmd *cmd = cmd_q->head;
 	struct cmd *next;
+	struct iovec iov;
 
 	if (!cmd)
 		return;
@@ -676,7 +682,10 @@ static void next_cmd(struct bthost *bthost)
 	if (!bthost->ncmd)
 		return;
 
-	send_packet(bthost, cmd->data, cmd->len);
+	iov.iov_base = cmd->data;
+	iov.iov_len = cmd->len;
+
+	send_packet(bthost, &iov, 1);
 	bthost->ncmd--;
 
 	if (next)
@@ -966,7 +975,13 @@ static void evt_encrypt_change(struct bthost *bthost, const void *data,
 	if (!conn)
 		return;
 
+	if (ev->status)
+		return;
+
 	conn->encr_mode = ev->encr_mode;
+
+	if (conn->smp_data)
+		smp_conn_encrypted(conn->smp_data, conn->encr_mode);
 }
 
 static void evt_io_cap_response(struct bthost *bthost, const void *data,
@@ -1226,7 +1241,7 @@ static bool l2cap_conn_req(struct bthost *bthost, struct btconn *conn,
 
 	cb_data = bthost_find_l2cap_cb_by_psm(bthost, psm);
 	if (cb_data)
-		rsp.dcid = cpu_to_le16(conn->next_cid++);
+		rsp.dcid = rsp.scid;
 	else
 		rsp.result = cpu_to_le16(0x0002); /* PSM Not Supported */
 
@@ -2069,6 +2084,17 @@ void bthost_hci_connect(struct bthost *bthost, const uint8_t *bdaddr,
 	}
 }
 
+void bthost_hci_disconnect(struct bthost *bthost, uint16_t handle,
+								uint8_t reason)
+{
+	struct bt_hci_cmd_disconnect disc;
+
+	disc.handle = cpu_to_le16(handle);
+	disc.reason = reason;
+
+	send_command(bthost, BT_HCI_CMD_DISCONNECT, &disc, sizeof(disc));
+}
+
 void bthost_write_scan_enable(struct bthost *bthost, uint8_t scan)
 {
 	send_command(bthost, BT_HCI_CMD_WRITE_SCAN_ENABLE, &scan, 1);
@@ -2121,7 +2147,7 @@ void bthost_request_auth(struct bthost *bthost, uint16_t handle)
 		cp.handle = cpu_to_le16(handle);
 		send_command(bthost, BT_HCI_CMD_AUTH_REQUESTED, &cp, sizeof(cp));
 	} else {
-		smp_pair(conn->smp_data);
+		smp_pair(conn->smp_data, bthost->io_capability, bthost->auth_req);
 	}
 }
 
@@ -2166,14 +2192,29 @@ void bthost_set_io_capability(struct bthost *bthost, uint8_t io_capability)
 	bthost->io_capability = io_capability;
 }
 
+uint8_t bthost_get_io_capability(struct bthost *bthost)
+{
+	return bthost->io_capability;
+}
+
 void bthost_set_auth_req(struct bthost *bthost, uint8_t auth_req)
 {
 	bthost->auth_req = auth_req;
 }
 
+uint8_t bthost_get_auth_req(struct bthost *bthost)
+{
+	return bthost->auth_req;
+}
+
 void bthost_set_reject_user_confirm(struct bthost *bthost, bool reject)
 {
 	bthost->reject_user_confirm = reject;
+}
+
+bool bthost_get_reject_user_confirm(struct bthost *bthost)
+{
+	return bthost->reject_user_confirm;
 }
 
 void bthost_add_rfcomm_server(struct bthost *bthost, uint8_t channel,

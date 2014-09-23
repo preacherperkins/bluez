@@ -271,8 +271,10 @@ static void folder_listing_cb(struct obc_session *session,
 	}
 
 	reply = dbus_message_new_method_return(request->msg);
-	if (reply == NULL)
-		return;
+	if (reply == NULL) {
+		g_free(contents);
+		goto clean;
+	}
 
 	dbus_message_iter_init_append(reply, &iter);
 	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
@@ -288,6 +290,7 @@ static void folder_listing_cb(struct obc_session *session,
 
 done:
 	g_dbus_send_message(conn, reply);
+clean:
 	pending_request_free(request);
 }
 
@@ -444,8 +447,7 @@ static DBusMessage *map_msg_get(DBusConnection *connection,
 		return g_dbus_create_error(message,
 				ERROR_INTERFACE ".InvalidArguments", NULL);
 
-	if (snprintf(handle, sizeof(handle), "%" PRIx64, msg->handle) < 0)
-		goto fail;
+	snprintf(handle, sizeof(handle), "%" PRIx64, msg->handle);
 
 	transfer = obc_transfer_get("x-bt/message", handle, target_file, &err);
 	if (transfer == NULL)
@@ -743,8 +745,7 @@ static void set_status(const GDBusPropertyTable *property,
 
 	contents[0] = FILLER_BYTE;
 
-	if (snprintf(handle, sizeof(handle), "%" PRIx64, msg->handle) < 0)
-		goto fail;
+	snprintf(handle, sizeof(handle), "%" PRIx64, msg->handle);
 
 	transfer = obc_transfer_put("x-bt/messageStatus", handle, NULL,
 					contents, sizeof(contents), &err);
@@ -1131,7 +1132,8 @@ static void msg_element(GMarkupParseContext *ctxt, const char *element,
 
 		for (parser = msg_parsers; parser && parser->name; parser++) {
 			if (strcasecmp(key, parser->name) == 0) {
-				parser->func(msg, values[i]);
+				if (values[i])
+					parser->func(msg, values[i]);
 				break;
 			}
 		}
@@ -1180,8 +1182,10 @@ static void message_listing_cb(struct obc_session *session,
 	}
 
 	reply = dbus_message_new_method_return(request->msg);
-	if (reply == NULL)
-		return;
+	if (reply == NULL) {
+		g_free(contents);
+		goto clean;
+	}
 
 	dbus_message_iter_init_append(reply, &iter);
 	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY,
@@ -1208,6 +1212,7 @@ static void message_listing_cb(struct obc_session *session,
 
 done:
 	g_dbus_send_message(conn, reply);
+clean:
 	pending_request_free(request);
 }
 

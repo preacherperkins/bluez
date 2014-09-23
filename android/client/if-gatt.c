@@ -15,6 +15,8 @@
  *
  */
 
+#include <stdbool.h>
+
 #include <hardware/bluetooth.h>
 
 #include "../hal-utils.h"
@@ -110,6 +112,21 @@ const btgatt_interface_t *if_gatt = NULL;
 			haltest_error("No descr_id specified\n"); \
 			return;\
 		} \
+	} while (0)
+
+#define GET_VERIFY_HEX_STRING(n, v, l) \
+	do { \
+		int ll;\
+		if (n[0] != '0' || (n[1] != 'X' && n[1] != 'x')) { \
+			haltest_error("Value must be hex string\n"); \
+			return; \
+		} \
+		ll = fill_buffer(n + 2, (uint8_t *) v, sizeof(v)); \
+		if (ll < 0) { \
+			haltest_error("Value must be byte hex string\n"); \
+			return; \
+		} \
+		l = ll; \
 	} while (0)
 
 /* Gatt uses little endian uuid */
@@ -794,6 +811,10 @@ static int fill_buffer(const char *str, uint8_t *out, int out_size)
 
 	str_len = strlen(str);
 
+	/* Hex string must be byte format */
+	if (str_len % 2)
+		return -1;
+
 	for (i = 0, j = 0; i < out_size && j < str_len; i++, j++) {
 		c = str[j];
 
@@ -1191,11 +1212,7 @@ static void write_characteristic_p(int argc, const char **argv)
 		return;
 	}
 
-	/* len in chars */
-	len = strlen(argv[6]);
-	scan_field(argv[6], len, value, sizeof(value));
-	/* len in bytes converted from ascii chars */
-	len = (len + 1) / 2;
+	GET_VERIFY_HEX_STRING(argv[6], value, len);
 
 	/* auth_req */
 	if (argc > 7)
@@ -1790,10 +1807,8 @@ static void gatts_send_indication_p(int argc, const char *argv[])
 	}
 	confirm = atoi(argv[5]);
 
-	if (argc > 6) {
-		len = strlen(argv[6]);
-		scan_field(argv[6], len, (uint8_t *) data, sizeof(data));
-	}
+	if (argc > 6)
+		GET_VERIFY_HEX_STRING(argv[6], data, len);
 
 	EXEC(if_gatt->server->send_indication, server_if, attr_handle, conn_id,
 							len, confirm, data);
@@ -1822,17 +1837,9 @@ static void gatts_send_response_p(int argc, const char *argv[])
 	data.attr_value.len = 0;
 
 	if (argc > 7) {
-		const char *str;
+		GET_VERIFY_HEX_STRING(argv[7], data.attr_value.value,
+							data.attr_value.len);
 
-		if (strncmp(argv[7], "0X", 2) && strncmp(argv[7], "0x", 2)) {
-			haltest_error("Value must be hex string");
-			return;
-		}
-
-		str = argv[7] + 2;
-
-		data.attr_value.len = fill_buffer(str, data.attr_value.value,
-						sizeof(data.attr_value.value));
 		if (data.attr_value.len == 0) {
 			haltest_error("Failed to parse response value");
 			return;

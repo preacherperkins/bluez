@@ -37,14 +37,15 @@
 
 #include <sys/signalfd.h>
 #if defined(ANDROID)
+#include <sys/prctl.h>
 #include <sys/capability.h>
-#include <linux/prctl.h>
 #endif
 
 #include <glib.h>
 
 #include "src/log.h"
 #include "src/sdpd.h"
+#include "src/shared/util.h"
 
 #include "lib/bluetooth.h"
 
@@ -60,9 +61,19 @@
 #include "handsfree.h"
 #include "gatt.h"
 #include "health.h"
+#include "handsfree-client.h"
+#include "utils.h"
+
+#define DEFAULT_VENDOR "BlueZ"
+#define DEFAULT_MODEL "BlueZ for Android"
+#define DEFAULT_NAME "BlueZ for Android"
 
 #define STARTUP_GRACE_SECONDS 5
 #define SHUTDOWN_GRACE_SECONDS 10
+
+static char *config_vendor = NULL;
+static char *config_model = NULL;
+static char *config_name = NULL;
 
 static guint bluetooth_start_timeout = 0;
 
@@ -73,6 +84,30 @@ static GMainLoop *event_loop;
 static struct ipc *hal_ipc = NULL;
 
 static bool services[HAL_SERVICE_ID_MAX + 1] = { false };
+
+const char *bt_config_get_vendor(void)
+{
+	if (config_vendor)
+		return config_vendor;
+
+	return DEFAULT_VENDOR;
+}
+
+const char *bt_config_get_name(void)
+{
+	if (config_name)
+		return config_name;
+
+	return DEFAULT_NAME;
+}
+
+const char *bt_config_get_model(void)
+{
+	if (config_model)
+		return config_model;
+
+	return DEFAULT_MODEL;
+}
 
 static void service_register(const void *buf, uint16_t len)
 {
@@ -145,6 +180,13 @@ static void service_register(const void *buf, uint16_t len)
 		}
 
 		break;
+	case HAL_SERVICE_ID_HANDSFREE_CLIENT:
+		if (!bt_hf_client_register(hal_ipc, &adapter_bdaddr)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
 	default:
 		DBG("service %u not supported", m->service_id);
 		status = HAL_STATUS_FAILED;
@@ -162,17 +204,12 @@ failed:
 								status);
 }
 
-static void service_unregister(const void *buf, uint16_t len)
+static bool unregister_service(uint8_t id)
 {
-	const struct hal_cmd_unregister_module *m = buf;
-	uint8_t status;
+	if (id > HAL_SERVICE_ID_MAX || !services[id])
+		return false;
 
-	if (m->service_id > HAL_SERVICE_ID_MAX || !services[m->service_id]) {
-		status = HAL_STATUS_FAILED;
-		goto failed;
-	}
-
-	switch (m->service_id) {
+	switch (id) {
 	case HAL_SERVICE_ID_BLUETOOTH:
 		bt_bluetooth_unregister();
 		break;
@@ -200,17 +237,28 @@ static void service_unregister(const void *buf, uint16_t len)
 	case HAL_SERVICE_ID_HEALTH:
 		bt_health_unregister();
 		break;
+	case HAL_SERVICE_ID_HANDSFREE_CLIENT:
+		bt_hf_client_unregister();
+		break;
 	default:
-		/*
-		 * This would indicate bug in HAL, as unregister should not be
-		 * called in init failed
-		 */
-		DBG("service %u not supported", m->service_id);
+		DBG("service %u not supported", id);
+		return false;
+	}
+
+	services[id] = false;
+
+	return true;
+}
+
+static void service_unregister(const void *buf, uint16_t len)
+{
+	const struct hal_cmd_unregister_module *m = buf;
+	uint8_t status;
+
+	if (!unregister_service(m->service_id)) {
 		status = HAL_STATUS_FAILED;
 		goto failed;
 	}
-
-	services[m->service_id] = false;
 
 	status = HAL_STATUS_SUCCESS;
 
@@ -221,11 +269,84 @@ failed:
 								status);
 }
 
+static char *get_prop(char *prop, uint16_t len, const uint8_t *val)
+{
+	/* TODO should fail if set more than once ? */
+	free(prop);
+
+	prop = malloc0(len);
+	if (!prop)
+		return NULL;
+
+	memcpy(prop, val, len);
+	prop[len - 1] = '\0';
+
+	return prop;
+}
+
+static void configuration(const void *buf, uint16_t len)
+{
+	const struct hal_cmd_configuration *cmd = buf;
+	const struct hal_config_prop *prop;
+	unsigned int i;
+
+	buf += sizeof(*cmd);
+	len -= sizeof(*cmd);
+
+	for (i = 0; i < cmd->num; i++) {
+		prop = buf;
+
+		if (len < sizeof(*prop) || len < sizeof(*prop) + prop->len) {
+			error("Invalid configuration command, terminating");
+			raise(SIGTERM);
+			return;
+		}
+
+		switch (prop->type) {
+		case HAL_CONFIG_VENDOR:
+			config_vendor = get_prop(config_vendor, prop->len,
+								prop->val);
+
+			DBG("vendor %s", config_vendor);
+
+			break;
+		case HAL_CONFIG_NAME:
+			config_name = get_prop(config_name, prop->len,
+								prop->val);
+
+			DBG("name %s", config_name);
+
+			break;
+		case HAL_CONFIG_MODEL:
+			config_model = get_prop(config_model, prop->len,
+								prop->val);
+
+			DBG("model %s", config_model);
+
+			break;
+		default:
+			error("Invalid configuration option (%u), terminating",
+								prop->type);
+			raise(SIGTERM);
+			return;
+		}
+
+		buf += sizeof(*prop) + prop->len;
+		len -= sizeof(*prop) + prop->len;
+		prop = buf;
+	}
+
+	ipc_send_rsp(hal_ipc, HAL_SERVICE_ID_CORE, HAL_OP_CONFIGURATION,
+							HAL_STATUS_SUCCESS);
+}
+
 static const struct ipc_handler cmd_handlers[] = {
 	/* HAL_OP_REGISTER_MODULE */
 	{ service_register, false, sizeof(struct hal_cmd_register_module) },
 	/* HAL_OP_UNREGISTER_MODULE */
 	{ service_unregister, false, sizeof(struct hal_cmd_unregister_module) },
+	/* HAL_OP_CONFIGURATION */
+	{ configuration, true, sizeof(struct hal_cmd_configuration) },
 };
 
 static void bluetooth_stopped(void)
@@ -382,42 +503,8 @@ static void cleanup_services(void)
 
 	DBG("");
 
-	for (i = HAL_SERVICE_ID_BLUETOOTH; i < HAL_SERVICE_ID_MAX + 1; i++) {
-		if (!services[i])
-			continue;
-
-		switch (i) {
-		case HAL_SERVICE_ID_BLUETOOTH:
-			bt_bluetooth_unregister();
-			break;
-		case HAL_SERVICE_ID_SOCKET:
-			bt_socket_unregister();
-			break;
-		case HAL_SERVICE_ID_HIDHOST:
-			bt_hid_unregister();
-			break;
-		case HAL_SERVICE_ID_A2DP:
-			bt_a2dp_unregister();
-			break;
-		case HAL_SERVICE_ID_AVRCP:
-			bt_avrcp_unregister();
-			break;
-		case HAL_SERVICE_ID_PAN:
-			bt_pan_unregister();
-			break;
-		case HAL_SERVICE_ID_HANDSFREE:
-			bt_handsfree_unregister();
-			break;
-		case HAL_SERVICE_ID_GATT:
-			bt_gatt_unregister();
-			break;
-		case HAL_SERVICE_ID_HEALTH:
-			bt_health_unregister();
-			break;
-		}
-
-		services[i] = false;
-	}
+	for (i = HAL_SERVICE_ID_MAX; i > HAL_SERVICE_ID_CORE; i--)
+		unregister_service(i);
 }
 
 static bool set_capabilities(void)
@@ -557,6 +644,10 @@ int main(int argc, char *argv[])
 	info("Exit");
 
 	__btd_log_cleanup();
+
+	free(config_vendor);
+	free(config_model);
+	free(config_name);
 
 	return EXIT_SUCCESS;
 }
