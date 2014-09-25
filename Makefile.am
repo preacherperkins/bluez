@@ -162,7 +162,7 @@ src_bluetoothd_SOURCES = $(builtin_sources) \
 			src/shared/gatt-helpers.h src/shared/gatt-helpers.c \
 			src/shared/gatt-client.h src/shared/gatt-client.c
 src_bluetoothd_LDADD = lib/libbluetooth-internal.la gdbus/libgdbus-internal.la \
-			@GLIB_LIBS@ @DBUS_LIBS@ -ldl
+			@GLIB_LIBS@ @DBUS_LIBS@ -ldl -lrt
 src_bluetoothd_LDFLAGS = $(AM_LDFLAGS) -Wl,--export-dynamic \
 				-Wl,--version-script=$(srcdir)/src/bluetooth.ver
 

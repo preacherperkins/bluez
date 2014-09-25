@@ -40,7 +40,8 @@ AC_ARG_ENABLE(threads, AC_HELP_STRING([--enable-threads],
 AC_CHECK_FUNC(signalfd, dummy=yes,
 			AC_MSG_ERROR(signalfd support is required))
 
-AC_SEARCH_LIBS(clock_gettime,rt)
+AC_CHECK_LIB(rt, clock_gettime, dummy=yes,
+			AC_MSG_ERROR(realtime clock support is required))
 
 AC_CHECK_LIB(pthread, pthread_create, dummy=yes,
 			AC_MSG_ERROR(posix thread support is required))
