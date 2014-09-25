@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <alloca.h>
+#include <sys/uio.h>
 
 #include "src/shared/util.h"
 #include "src/shared/timeout.h"
@@ -335,6 +336,7 @@ static void set_bredr_commands(struct btdev *btdev)
 	btdev->commands[2]  |= 0x10;	/* Cancel Remote Name Request */
 	btdev->commands[2]  |= 0x20;	/* Read Remote Supported Features */
 	btdev->commands[2]  |= 0x40;	/* Read Remote Extended Features */
+	btdev->commands[3]  |= 0x01;	/* Read Clock Offset */
 	btdev->commands[5]  |= 0x08;	/* Read Default Link Policy */
 	btdev->commands[5]  |= 0x10;	/* Write Default Link Policy */
 	btdev->commands[6]  |= 0x01;	/* Set Event Filter */
@@ -621,103 +623,99 @@ void btdev_set_send_handler(struct btdev *btdev, btdev_send_func handler,
 	btdev->send_data = user_data;
 }
 
-static void send_packet(struct btdev *btdev, const void *data, uint16_t len)
+static void send_packet(struct btdev *btdev, const struct iovec *iov,
+								int iovlen)
 {
 	if (!btdev->send_handler)
 		return;
 
-	btdev->send_handler(data, len, btdev->send_data);
+	btdev->send_handler(iov, iovlen, btdev->send_data);
 }
 
 static void send_event(struct btdev *btdev, uint8_t event,
 						const void *data, uint8_t len)
 {
-	struct bt_hci_evt_hdr *hdr;
-	uint16_t pkt_len;
-	void *pkt_data;
+	struct bt_hci_evt_hdr hdr;
+	struct iovec iov[3];
+	uint8_t pkt = BT_H4_EVT_PKT;
 
-	pkt_len = 1 + sizeof(*hdr) + len;
+	iov[0].iov_base = &pkt;
+	iov[0].iov_len = sizeof(pkt);
 
-	pkt_data = malloc(pkt_len);
-	if (!pkt_data)
-		return;
+	hdr.evt = event;
+	hdr.plen = len;
 
-	((uint8_t *) pkt_data)[0] = BT_H4_EVT_PKT;
+	iov[1].iov_base = &hdr;
+	iov[1].iov_len = sizeof(hdr);
 
-	hdr = pkt_data + 1;
-	hdr->evt = event;
-	hdr->plen = len;
+	if (len > 0) {
+		iov[2].iov_base = (void *) data;
+		iov[2].iov_len = len;
+	}
 
-	if (len > 0)
-		memcpy(pkt_data + 1 + sizeof(*hdr), data, len);
+	if (run_hooks(btdev, BTDEV_HOOK_POST_EVT, event, data, len))
+		send_packet(btdev, iov, len > 0 ? 3 : 2);
+}
 
-	if (run_hooks(btdev, BTDEV_HOOK_POST_EVT, event, pkt_data, pkt_len))
-		send_packet(btdev, pkt_data, pkt_len);
+static void send_cmd(struct btdev *btdev, uint8_t evt, uint16_t opcode,
+					const struct iovec *iov, int iovlen)
+{
+	struct bt_hci_evt_hdr hdr;
+	struct iovec iov2[2 + iovlen];
+	uint8_t pkt = BT_H4_EVT_PKT;
+	int i;
 
-	free(pkt_data);
+	iov2[0].iov_base = &pkt;
+	iov2[0].iov_len = sizeof(pkt);
+
+	hdr.evt = evt;
+	hdr.plen = 0;
+
+	iov2[1].iov_base = &hdr;
+	iov2[1].iov_len = sizeof(hdr);
+
+	for (i = 0; i < iovlen; i++) {
+		hdr.plen += iov[i].iov_len;
+		iov2[2 + i].iov_base = iov[i].iov_base;
+		iov2[2 + i].iov_len = iov[i].iov_len;
+	}
+
+	if (run_hooks(btdev, BTDEV_HOOK_POST_CMD, opcode, iov[i -1].iov_base,
+							iov[i -1].iov_len))
+		send_packet(btdev, iov2, 2 + iovlen);
 }
 
 static void cmd_complete(struct btdev *btdev, uint16_t opcode,
 						const void *data, uint8_t len)
 {
-	struct bt_hci_evt_hdr *hdr;
-	struct bt_hci_evt_cmd_complete *cc;
-	uint16_t pkt_len;
-	void *pkt_data;
+	struct bt_hci_evt_cmd_complete cc;
+	struct iovec iov[2];
 
-	pkt_len = 1 + sizeof(*hdr) + sizeof(*cc) + len;
+	cc.ncmd = 0x01;
+	cc.opcode = cpu_to_le16(opcode);
 
-	pkt_data = malloc(pkt_len);
-	if (!pkt_data)
-		return;
+	iov[0].iov_base = &cc;
+	iov[0].iov_len = sizeof(cc);
 
-	((uint8_t *) pkt_data)[0] = BT_H4_EVT_PKT;
+	iov[1].iov_base = (void *) data;
+	iov[1].iov_len = len;
 
-	hdr = pkt_data + 1;
-	hdr->evt = BT_HCI_EVT_CMD_COMPLETE;
-	hdr->plen = sizeof(*cc) + len;
-
-	cc = pkt_data + 1 + sizeof(*hdr);
-	cc->ncmd = 0x01;
-	cc->opcode = cpu_to_le16(opcode);
-
-	if (len > 0)
-		memcpy(pkt_data + 1 + sizeof(*hdr) + sizeof(*cc), data, len);
-
-	if (run_hooks(btdev, BTDEV_HOOK_POST_CMD, opcode, pkt_data, pkt_len))
-		send_packet(btdev, pkt_data, pkt_len);
-
-	free(pkt_data);
+	send_cmd(btdev, BT_HCI_EVT_CMD_COMPLETE, opcode, iov, 2);
 }
 
 static void cmd_status(struct btdev *btdev, uint8_t status, uint16_t opcode)
 {
-	struct bt_hci_evt_hdr *hdr;
-	struct bt_hci_evt_cmd_status *cs;
-	uint16_t pkt_len;
-	void *pkt_data;
+	struct bt_hci_evt_cmd_status cs;
+	struct iovec iov;
 
-	pkt_len = 1 + sizeof(*hdr) + sizeof(*cs);
+	cs.status = status;
+	cs.ncmd = 0x01;
+	cs.opcode = cpu_to_le16(opcode);
 
-	pkt_data = malloc(pkt_len);
-	if (!pkt_data)
-		return;
+	iov.iov_base = &cs;
+	iov.iov_len = sizeof(cs);
 
-	((uint8_t *) pkt_data)[0] = BT_H4_EVT_PKT;
-
-	hdr = pkt_data + 1;
-	hdr->evt = BT_HCI_EVT_CMD_STATUS;
-	hdr->plen = sizeof(*cs);
-
-	cs = pkt_data + 1 + sizeof(*hdr);
-	cs->status = status;
-	cs->ncmd = 0x01;
-	cs->opcode = cpu_to_le16(opcode);
-
-	if (run_hooks(btdev, BTDEV_HOOK_POST_CMD, opcode, pkt_data, pkt_len))
-		send_packet(btdev, pkt_data, pkt_len);
-
-	free(pkt_data);
+	send_cmd(btdev, BT_HCI_EVT_CMD_STATUS, opcode, &iov, 1);
 }
 
 static void num_completed_packets(struct btdev *btdev)
@@ -1021,7 +1019,9 @@ static void le_conn_complete(struct btdev *btdev,
 								bdaddr_type);
 
 		btdev->conn = remote;
+		btdev->le_adv_enable = 0;
 		remote->conn = btdev;
+		remote->le_adv_enable = 0;
 
 		cc->status = status;
 		cc->peer_addr_type = btdev->le_scan_own_addr_type;
@@ -1087,7 +1087,8 @@ static void le_conn_request(struct btdev *btdev, const uint8_t *bdaddr,
 {
 	struct btdev *remote = find_btdev_by_bdaddr_type(bdaddr, bdaddr_type);
 
-	if (remote && adv_connectable(remote) && adv_match(btdev, remote))
+	if (remote && adv_connectable(remote) && adv_match(btdev, remote) &&
+					remote->le_adv_own_addr == bdaddr_type)
 		le_conn_complete(btdev, bdaddr, bdaddr_type, 0);
 	else
 		le_conn_complete(btdev, bdaddr, bdaddr_type,
@@ -1109,6 +1110,34 @@ static void conn_request(struct btdev *btdev, const uint8_t *bdaddr)
 	} else {
 		conn_complete(btdev, bdaddr, BT_HCI_ERR_PAGE_TIMEOUT);
 	}
+}
+
+static void le_conn_update(struct btdev *btdev, uint16_t handle,
+				uint16_t max_interval, uint16_t min_interval,
+				uint16_t latency, uint16_t supv_timeout,
+				uint16_t min_length, uint16_t max_length)
+{
+	struct btdev *remote = btdev->conn;
+	struct __packed {
+		uint8_t subevent;
+		struct bt_hci_evt_le_conn_update_complete ev;
+	} ev;
+
+	ev.subevent = BT_HCI_EVT_LE_CONN_UPDATE_COMPLETE;
+	ev.ev.handle = cpu_to_le16(handle);
+	ev.ev.interval = cpu_to_le16(min_interval);
+	ev.ev.latency = cpu_to_le16(latency);
+	ev.ev.supv_timeout = cpu_to_le16(supv_timeout);
+
+	if (remote)
+		ev.ev.status = BT_HCI_ERR_SUCCESS;
+	else
+		ev.ev.status = BT_HCI_ERR_UNKNOWN_CONN_ID;
+
+	send_event(btdev, BT_HCI_EVT_LE_META_EVENT, &ev, sizeof(ev));
+
+	if (remote)
+		send_event(remote, BT_HCI_EVT_LE_META_EVENT, &ev, sizeof(ev));
 }
 
 static void disconnect_complete(struct btdev *btdev, uint16_t handle,
@@ -1425,7 +1454,7 @@ static void remote_ext_features_complete(struct btdev *btdev, uint16_t handle,
 			break;
 		case 0x01:
 			refc.status = BT_HCI_ERR_SUCCESS;
-			btdev_get_host_features(btdev, refc.features);
+			btdev_get_host_features(btdev->conn, refc.features);
 			break;
 		default:
 			refc.status = BT_HCI_ERR_INVALID_PARAMETERS;
@@ -1464,6 +1493,24 @@ static void remote_version_complete(struct btdev *btdev, uint16_t handle)
 
 	send_event(btdev, BT_HCI_EVT_REMOTE_VERSION_COMPLETE,
 							&rvc, sizeof(rvc));
+}
+
+static void remote_clock_offset_complete(struct btdev *btdev, uint16_t handle)
+{
+	struct bt_hci_evt_clock_offset_complete coc;
+
+	if (btdev->conn) {
+		coc.status = BT_HCI_ERR_SUCCESS;
+		coc.handle = cpu_to_le16(handle);
+		coc.clock_offset = 0;
+	} else {
+		coc.status = BT_HCI_ERR_UNKNOWN_CONN_ID;
+		coc.handle = cpu_to_le16(handle);
+		coc.clock_offset = 0;
+	}
+
+	send_event(btdev, BT_HCI_EVT_CLOCK_OFFSET_COMPLETE,
+							&coc, sizeof(coc));
 }
 
 static void io_cap_req_reply_complete(struct btdev *btdev,
@@ -1724,8 +1771,16 @@ static void le_encrypt_complete(struct btdev *btdev)
 	cmd_complete(btdev, BT_HCI_CMD_LE_LTK_REQ_REPLY, &rp, sizeof(rp));
 
 	memset(&ev, 0, sizeof(ev));
+
+	if (memcmp(btdev->le_ltk, remote->le_ltk, 16)) {
+		ev.status = BT_HCI_ERR_AUTH_FAILURE;
+		ev.encr_mode = 0x00;
+	} else {
+		ev.status = BT_HCI_ERR_SUCCESS;
+		ev.encr_mode = 0x01;
+	}
+
 	ev.handle = cpu_to_le16(42);
-	ev.encr_mode = 0x01;
 
 	send_event(btdev, BT_HCI_EVT_ENCRYPT_CHANGE, &ev, sizeof(ev));
 	send_event(remote, BT_HCI_EVT_ENCRYPT_CHANGE, &ev, sizeof(ev));
@@ -1967,6 +2022,12 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		break;
 
 	case BT_HCI_CMD_READ_REMOTE_VERSION:
+		cmd_status(btdev, BT_HCI_ERR_SUCCESS, opcode);
+		break;
+
+	case BT_HCI_CMD_READ_CLOCK_OFFSET:
+		if (btdev->type == BTDEV_TYPE_LE)
+			goto unsupported;
 		cmd_status(btdev, BT_HCI_ERR_SUCCESS, opcode);
 		break;
 
@@ -2726,6 +2787,12 @@ static void default_cmd(struct btdev *btdev, uint16_t opcode,
 		cmd_complete(btdev, opcode, &lrwls, sizeof(lrwls));
 		break;
 
+	case BT_HCI_CMD_LE_CONN_UPDATE:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			goto unsupported;
+		cmd_status(btdev, BT_HCI_ERR_SUCCESS, opcode);
+		break;
+
 	case BT_HCI_CMD_LE_CLEAR_WHITE_LIST:
 		if (btdev->type == BTDEV_TYPE_BREDR)
 			goto unsupported;
@@ -2874,7 +2941,9 @@ static void default_cmd_completion(struct btdev *btdev, uint16_t opcode,
 	const struct bt_hci_cmd_read_remote_features *rrf;
 	const struct bt_hci_cmd_read_remote_ext_features *rref;
 	const struct bt_hci_cmd_read_remote_version *rrv;
+	const struct bt_hci_cmd_read_clock_offset *rco;
 	const struct bt_hci_cmd_le_create_conn *lecc;
+	const struct bt_hci_cmd_le_conn_update *lecu;
 
 	switch (opcode) {
 	case BT_HCI_CMD_INQUIRY:
@@ -2999,12 +3068,32 @@ static void default_cmd_completion(struct btdev *btdev, uint16_t opcode,
 		remote_version_complete(btdev, le16_to_cpu(rrv->handle));
 		break;
 
+	case BT_HCI_CMD_READ_CLOCK_OFFSET:
+		if (btdev->type == BTDEV_TYPE_LE)
+			return;
+		rco = data;
+		remote_clock_offset_complete(btdev, le16_to_cpu(rco->handle));
+		break;
+
 	case BT_HCI_CMD_LE_CREATE_CONN:
 		if (btdev->type == BTDEV_TYPE_BREDR)
 			return;
 		lecc = data;
 		btdev->le_scan_own_addr_type = lecc->own_addr_type;
 		le_conn_request(btdev, lecc->peer_addr, lecc->peer_addr_type);
+		break;
+
+	case BT_HCI_CMD_LE_CONN_UPDATE:
+		if (btdev->type == BTDEV_TYPE_BREDR)
+			return;
+		lecu = data;
+		le_conn_update(btdev, le16_to_cpu(lecu->handle),
+				le16_to_cpu(lecu->min_interval),
+				le16_to_cpu(lecu->max_interval),
+				le16_to_cpu(lecu->latency),
+				le16_to_cpu(lecu->supv_timeout),
+				le16_to_cpu(lecu->min_length),
+				le16_to_cpu(lecu->max_length));
 		break;
 	}
 }
@@ -3092,6 +3181,7 @@ static void process_cmd(struct btdev *btdev, const void *data, uint16_t len)
 void btdev_receive_h4(struct btdev *btdev, const void *data, uint16_t len)
 {
 	uint8_t pkt_type;
+	struct iovec iov;
 
 	if (!btdev)
 		return;
@@ -3106,8 +3196,11 @@ void btdev_receive_h4(struct btdev *btdev, const void *data, uint16_t len)
 		process_cmd(btdev, data + 1, len - 1);
 		break;
 	case BT_H4_ACL_PKT:
-		if (btdev->conn)
-			send_packet(btdev->conn, data, len);
+		if (btdev->conn) {
+			iov.iov_base = (void *) data;
+			iov.iov_len = len;
+			send_packet(btdev->conn, &iov, 1);
+		}
 		num_completed_packets(btdev);
 		break;
 	default:

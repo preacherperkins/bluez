@@ -223,12 +223,6 @@ struct btd_device {
 	GIOChannel	*att_io;
 	guint		cleanup_id;
 	guint		store_id;
-
-	bool		pending_conn_params;
-	uint16_t	min_interval;
-	uint16_t	max_interval;
-	uint16_t	latency;
-	uint16_t	timeout;
 };
 
 static const uint16_t uuid_list[] = {
@@ -380,18 +374,6 @@ static gboolean store_device_info_cb(gpointer user_data)
 					device->version);
 	} else {
 		g_key_file_remove_group(key_file, "DeviceID", NULL);
-	}
-
-	if (device->pending_conn_params) {
-		device->pending_conn_params = false;
-		g_key_file_set_integer(key_file, "ConnectionParameters",
-					"MinInterval", device->min_interval);
-		g_key_file_set_integer(key_file, "ConnectionParameters",
-					"MaxInterval", device->max_interval);
-		g_key_file_set_integer(key_file, "ConnectionParameters",
-					"Latency", device->latency);
-		g_key_file_set_integer(key_file, "ConnectionParameters",
-					"Timeout", device->timeout);
 	}
 
 	create_file(filename, S_IRUSR | S_IWUSR);
@@ -1169,6 +1151,40 @@ void device_request_disconnect(struct btd_device *device, DBusMessage *msg)
 							device);
 }
 
+static void device_set_auto_connect(struct btd_device *device, gboolean enable)
+{
+	char addr[18];
+
+	if (!device || !device->le)
+		return;
+
+	ba2str(&device->bdaddr, addr);
+
+	DBG("%s auto connect: %d", addr, enable);
+
+	if (device->auto_connect == enable)
+		return;
+
+	device->auto_connect = enable;
+
+	/* Disabling auto connect */
+	if (enable == FALSE) {
+		adapter_connect_list_remove(device->adapter, device);
+		adapter_auto_connect_remove(device->adapter, device);
+		return;
+	}
+
+	/* Enabling auto connect */
+	adapter_auto_connect_add(device->adapter, device);
+
+	if (device->attrib) {
+		DBG("Already connected");
+		return;
+	}
+
+	adapter_connect_list_add(device->adapter, device);
+}
+
 static DBusMessage *dev_disconnect(DBusConnection *conn, DBusMessage *msg,
 							void *user_data)
 {
@@ -1178,8 +1194,10 @@ static DBusMessage *dev_disconnect(DBusConnection *conn, DBusMessage *msg,
 	 * Disable connections through passive scanning until
 	 * Device1.Connect is called
 	 */
-	if (device->auto_connect)
+	if (device->auto_connect) {
 		device->disable_auto_connect = TRUE;
+		device_set_auto_connect(device, FALSE);
+	}
 
 	device_request_disconnect(device, msg);
 
@@ -1484,7 +1502,10 @@ static DBusMessage *dev_connect(DBusConnection *conn, DBusMessage *msg,
 
 		btd_device_set_temporary(dev, FALSE);
 
-		dev->disable_auto_connect = FALSE;
+		if (dev->disable_auto_connect) {
+			dev->disable_auto_connect = FALSE;
+			device_set_auto_connect(dev, TRUE);
+		}
 
 		err = device_connect_le(dev);
 		if (err < 0)
@@ -2515,19 +2536,6 @@ void device_update_last_seen(struct btd_device *device, uint8_t bdaddr_type)
 		device->le_seen = time(NULL);
 }
 
-void device_set_conn_param(struct btd_device *dev, uint16_t min_interval,
-				uint16_t max_interval, uint16_t latency,
-				uint16_t timeout)
-{
-	dev->pending_conn_params = true;
-	dev->min_interval = min_interval;
-	dev->max_interval = max_interval;
-	dev->latency = latency;
-	dev->timeout = timeout;
-
-	store_device_info(dev);
-}
-
 /* It is possible that we have two device objects for the same device in
  * case it has first been discovered over BR/EDR and has a private
  * address when discovered over LE for the first time. In such a case we
@@ -2766,7 +2774,7 @@ int device_addr_type_cmp(gconstpointer a, gconstpointer b)
 	}
 
 	if (!dev->le)
-	       return -1;
+		return -1;
 
 	if (addr->bdaddr_type != dev->bdaddr_type)
 		return -1;
@@ -4097,40 +4105,6 @@ void device_set_rssi(struct btd_device *device, int8_t rssi)
 
 	g_dbus_emit_property_changed(dbus_conn, device->path,
 						DEVICE_INTERFACE, "RSSI");
-}
-
-static void device_set_auto_connect(struct btd_device *device, gboolean enable)
-{
-	char addr[18];
-
-	if (!device || !device->le)
-		return;
-
-	ba2str(&device->bdaddr, addr);
-
-	DBG("%s auto connect: %d", addr, enable);
-
-	if (device->auto_connect == enable)
-		return;
-
-	device->auto_connect = enable;
-
-	/* Disabling auto connect */
-	if (enable == FALSE) {
-		adapter_connect_list_remove(device->adapter, device);
-		adapter_auto_connect_remove(device->adapter, device);
-		return;
-	}
-
-	/* Enabling auto connect */
-	adapter_auto_connect_add(device->adapter, device);
-
-	if (device->attrib) {
-		DBG("Already connected");
-		return;
-	}
-
-	adapter_connect_list_add(device->adapter, device);
 }
 
 static gboolean start_discovery(gpointer user_data)

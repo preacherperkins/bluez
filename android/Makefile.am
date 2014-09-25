@@ -1,6 +1,6 @@
 if ANDROID
 
-AM_CFLAGS += -DANDROID_VERSION=0xFFFFFF
+AM_CFLAGS += -DANDROID_VERSION=0xFFFFFF -DBLUEZ_EXTENSIONS
 
 android_plugindir = $(abs_top_srcdir)/android/.libs
 
@@ -52,6 +52,7 @@ android_bluetoothd_SOURCES = android/main.c \
 				android/socket.h android/socket.c \
 				android/pan.h android/pan.c \
 				android/handsfree.h android/handsfree.c \
+				android/handsfree-client.c android/handsfree-client.h \
 				android/gatt.h android/gatt.c \
 				android/health.h android/health.c \
 				android/mcap-lib.h android/mcap-lib.c \
@@ -74,6 +75,7 @@ android_bluetooth_default_la_SOURCES = android/hal.h android/hal-bluetooth.c \
 					android/hal-a2dp.c \
 					android/hal-avrcp.c \
 					android/hal-handsfree.c \
+					android/hal-handsfree-client.c \
 					android/hal-gatt.c \
 					android/hardware/bluetooth.h \
 					android/hardware/bt_av.h \
@@ -87,6 +89,7 @@ android_bluetooth_default_la_SOURCES = android/hal.h android/hal-bluetooth.c \
 					android/hardware/bt_pan.h \
 					android/hardware/bt_rc.h \
 					android/hardware/bt_sock.h \
+					android/hardware/bt_hf_client.h \
 					android/hardware/hardware.h \
 					android/cutils/properties.h \
 					android/ipc-common.h \
@@ -108,6 +111,17 @@ android_mcaptest_SOURCES = android/mcaptest.c \
 android_mcaptest_CFLAGS = $(AM_CFLAGS)
 
 android_mcaptest_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
+
+noinst_PROGRAMS += android/avdtptest
+
+android_avdtptest_SOURCES = android/avdtptest.c \
+				src/log.h src/log.c \
+				btio/btio.h btio/btio.c \
+				android/avdtp.h android/avdtp.c
+
+android_avdtptest_CFLAGS = $(AM_CFLAGS)
+
+android_avdtptest_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
 
 noinst_PROGRAMS += android/haltest
 
@@ -157,6 +171,10 @@ android_android_tester_SOURCES = emulator/btdev.h emulator/btdev.c \
 				android/tester-bluetooth.c \
 				android/tester-socket.c \
 				android/tester-hidhost.c \
+				android/tester-pan.c \
+				android/tester-hdp.c \
+				android/tester-a2dp.c \
+				android/tester-avrcp.c \
 				android/tester-gatt.c \
 				android/tester-main.h android/tester-main.c
 
@@ -196,7 +214,9 @@ android_audio_a2dp_default_la_SOURCES = android/audio-msg.h \
 					android/hardware/audio.h \
 					android/hardware/audio_effect.h \
 					android/hardware/hardware.h \
-					android/system/audio.h
+					android/system/audio.h \
+					src/shared/queue.h \
+					src/shared/queue.c
 
 android_audio_sco_default_la_SOURCES = android/hal-log.h \
 					android/sco-msg.h \

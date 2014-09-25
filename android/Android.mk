@@ -14,6 +14,10 @@ BLUEZ_COMMON_CFLAGS := -DVERSION=\"$(BLUEZ_VERSION)\" \
 			-DANDROID_VERSION=$(ANDROID_VERSION) \
 			-DANDROID_STORAGEDIR=\"/data/misc/bluetooth\" \
 
+ifeq ($(BLUEZ_EXTENSIONS), true)
+BLUEZ_COMMON_CFLAGS += -DBLUEZ_EXTENSIONS
+endif
+
 # Enable warnings enabled in autotools build
 BLUEZ_COMMON_CFLAGS += -Wall -Wextra \
 			-Wdeclaration-after-statement \
@@ -49,6 +53,7 @@ LOCAL_SRC_FILES := \
 	bluez/android/avrcp-lib.c \
 	bluez/android/pan.c \
 	bluez/android/handsfree.c \
+	bluez/android/handsfree-client.c \
 	bluez/android/gatt.c \
 	bluez/android/health.c \
 	bluez/android/mcap-lib.c \
@@ -127,6 +132,10 @@ LOCAL_SRC_FILES := \
 	bluez/android/hal-gatt.c \
 	bluez/android/hal-utils.c \
 	bluez/android/hal-health.c \
+
+ifeq ($(BLUEZ_EXTENSIONS), true)
+LOCAL_SRC_FILES += bluez/android/hal-handsfree-client.c
+endif
 
 LOCAL_C_INCLUDES += \
 	$(call include-path-for, system-core) \
@@ -223,6 +232,39 @@ LOCAL_MODULE := mcaptest
 include $(BUILD_EXECUTABLE)
 
 #
+# avdtptest
+#
+
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES := \
+	bluez/android/avdtptest.c \
+	bluez/android/avdtp.c \
+	bluez/src/log.c \
+	bluez/btio/btio.c \
+	bluez/lib/bluetooth.c \
+	bluez/lib/hci.c \
+
+LOCAL_C_INCLUDES += \
+	$(LOCAL_PATH)/bluez \
+	$(call include-path-for, glib) \
+	$(call include-path-for, glib)/glib \
+
+LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
+
+LOCAL_SHARED_LIBRARIES := \
+	libglib \
+
+LOCAL_STATIC_LIBRARIES := \
+	bluetooth-headers \
+
+LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
+LOCAL_MODULE_TAGS := debug
+LOCAL_MODULE := avdtptest
+
+include $(BUILD_EXECUTABLE)
+
+#
 # btmon
 #
 
@@ -236,6 +278,7 @@ LOCAL_SRC_FILES := \
 	bluez/monitor/control.c \
 	bluez/monitor/packet.c \
 	bluez/monitor/l2cap.c \
+	bluez/monitor/avctp.c \
 	bluez/monitor/uuid.c \
 	bluez/monitor/sdp.c \
 	bluez/monitor/vendor.c \
@@ -593,7 +636,8 @@ ifneq (,$(filter userdebug eng,$(TARGET_BUILD_VARIANT)))
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
-	bluez/android/bluetoothd-wrapper.c
+	bluez/android/bluetoothd-wrapper.c \
+	bluez/android/hal-utils.c
 
 LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
 

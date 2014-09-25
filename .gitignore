@@ -64,7 +64,7 @@ tools/bluemoon
 tools/seq2bseq
 tools/hex2hcd
 tools/btiotest
-tools/mpris-player
+tools/mpris-proxy
 tools/bluetooth-player
 tools/l2cap-tester
 tools/sco-tester
@@ -75,6 +75,7 @@ tools/btinfo
 tools/3dsp
 tools/obexctl
 tools/gatt-service
+tools/btgatt-client
 test/sap_client.pyc
 test/bluezutils.pyc
 unit/test-ringbuf
@@ -126,6 +127,7 @@ doc/btmon.1
 
 android/system-emulator
 android/bluetoothd
+android/avdtptest
 android/mcaptest
 android/haltest
 android/android-tester
