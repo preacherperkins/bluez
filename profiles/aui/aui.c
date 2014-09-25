@@ -42,7 +42,6 @@
 #include "src/dbus-common.h"
 
 #include "aui.h"
-#include "aui-advertise.h"
 
 enum {
 	NOP                = 255,
@@ -184,29 +183,6 @@ static gboolean register_aui_service(struct Self *self)
 			GATT_OPT_INVALID);
 }
 
-static void aui_configure_advertising(struct btd_profile *p, struct btd_adapter *adapter)
-{
-	if(aui_set_powered_blocking(adapter) < 0) {
-		error("Could not power on device id %d", btd_adapter_get_index(adapter));
-	}
-
-	if(aui_set_advertise_params(adapter) < 0) {
-		error("Could not set advertising parameter data");
-	}
-
-	if(aui_set_advertise_data(adapter) < 0) {
-		error("Could not set advertising data");
-	}
-
-	if(aui_set_scan_response_data(adapter, p->name) < 0) {
-		error("Could not set response data");
-	}
-
-	if(aui_set_advertise_enable(adapter, TRUE) < 0) {
-		error("Could not enable advertising");
-	}
-}
-
 static void aui_destroy_adapter(gpointer user_data)
 {
 	DBG("DSD: %s",__FUNCTION__);
@@ -227,8 +203,6 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 		return -EIO;
 	}
 
-	aui_configure_advertising(p, adapter);
-
 	if (!g_dbus_register_interface(btd_get_dbus_connection(),
 				adapter_get_path(adapter),
 				AUI_MANAGER_INTERFACE,
@@ -248,15 +222,6 @@ static void aui_adapter_remove(struct btd_profile *p, struct btd_adapter *adapte
 	const char *path = adapter_get_path(adapter);
 
 	DBG("DSD: path %s", path);
-
-	/* Currently this will always fail. This is because
-	 * the device gets disabled before this callback is called
-	 * Need to find another way to disable advertising, but having
-	 * this here for now makes for a good reminder
-	 */
-	if(aui_set_advertise_enable(adapter, FALSE) < 0) {
-		error("Could not disable advertising");
-	}
 
 	g_free(self);
 

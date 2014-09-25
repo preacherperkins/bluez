@@ -437,18 +437,6 @@ profiles_cups_bluetooth_LDADD = @GLIB_LIBS@ @DBUS_LIBS@ \
 				gdbus/libgdbus-internal.la
 endif
 
-if EXPERIMENTAL
-noinst_PROGRAMS += profiles/aui/set-aui-adv
-profiles_aui_set_aui_adv_SOURCES = profiles/aui/set-aui-adv.c \
-				    profiles/aui/ad_types.h \
-				    profiles/aui/aui.h \
-				    profiles/aui/hci_ext.c \
-				    profiles/aui/hci_ext.h \
-				    lib/uuid.h
-
-profiles_aui_set_aui_adv_LDADD = lib/libbluetooth-internal.la
-endif
-
 test_scripts += test/sap_client.py test/bluezutils.py \
 		test/dbusdef.py test/monitor-bluetooth test/list-devices \
 		test/test-discovery test/test-manager test/test-adapter \

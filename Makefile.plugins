@@ -129,9 +129,5 @@ builtin_sources += profiles/arc/arc.c \
 
 builtin_modules += aui
 builtin_sources += profiles/aui/aui.c \
-		   profiles/aui/ad_types.h \
-		   profiles/aui/aui-advertise.c \
-		   profiles/aui/aui-advertise.h \
-		   profiles/aui/hci_ext.c \
-		   profiles/aui/hci_ext.h
+		   profiles/aui/aui.h
 
