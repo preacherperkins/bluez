@@ -57,6 +57,9 @@ enum {
 struct Self {
 	uint8_t aui_cmd;
 	struct btd_adapter *adapter;
+	double volume;
+	int16_t volume_in_db;
+	uint32_t volume_dbus_id;
 } *self;
 
 static gboolean aui_property_cmd(const GDBusPropertyTable *property,
@@ -149,14 +152,29 @@ static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *
 	return 0;
 }
 
+static uint8_t aui_get_abs_volume(struct attribute *a, struct btd_device *device, gpointer user_data)
+{
+	struct Self *self = user_data;
+	char volume[9];
+
+	DBG("DSD: %s: Returning volume: '%f'", __FUNCTION__, self->volume);
+
+	sprintf(volume, "%f", self->volume);
+
+	attrib_db_update(self->adapter, a->handle, NULL, volume, sizeof(volume), NULL);
+
+	return 0;
+}
+
 static gboolean register_aui_service(struct Self *self)
 {
-	bt_uuid_t srv_uuid, rcv_uuid, devid_uuid, send_uuid;
+	bt_uuid_t srv_uuid, rcv_uuid, devid_uuid, send_uuid, volume_uuid;
 
-	bt_string_to_uuid(  &srv_uuid, AUI_SERVICE_UUID);
-	bt_string_to_uuid(  &rcv_uuid, AUI_RCV_UUID);
-	bt_string_to_uuid(&devid_uuid, AUI_DEVID_UUID);
-	bt_string_to_uuid( &send_uuid, AUI_SEND_UUID);
+	bt_string_to_uuid(   &srv_uuid, AUI_SERVICE_UUID);
+	bt_string_to_uuid(   &rcv_uuid, AUI_RCV_UUID);
+	bt_string_to_uuid( &devid_uuid, AUI_DEVID_UUID);
+	bt_string_to_uuid(  &send_uuid, AUI_SEND_UUID);
+	bt_string_to_uuid(&volume_uuid, AUI_VOLUME_UUID);
 
 	/* Aether User Interface service */
 	return gatt_service_add(self->adapter, GATT_PRIM_SVC_UUID, &srv_uuid,
@@ -180,12 +198,74 @@ static gboolean register_aui_service(struct Self *self)
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
 			aui_send_event_to_remote, self,
 
+			/* Absolute Volume */
+			GATT_OPT_CHR_UUID, &volume_uuid,
+			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ,
+			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
+			aui_get_abs_volume, self,
+
 			GATT_OPT_INVALID);
 }
 
 static void aui_destroy_adapter(gpointer user_data)
 {
 	DBG("DSD: %s",__FUNCTION__);
+}
+
+static gboolean set_volume_attr(DBusMessageIter *curr_iter, const char *key, struct Self *self)
+{
+	int ctype;
+	DBusMessageIter new_iter;
+	DBusBasicValue value;
+
+	while((ctype = dbus_message_iter_get_arg_type(curr_iter)) != DBUS_TYPE_INVALID) {
+
+		switch(ctype) {
+			case DBUS_TYPE_VARIANT :
+			case DBUS_TYPE_DICT_ENTRY :
+			case DBUS_TYPE_ARRAY :
+				dbus_message_iter_recurse(curr_iter, &new_iter);
+				set_volume_attr(&new_iter, key, self);
+				break;
+			case DBUS_TYPE_STRING :
+				dbus_message_iter_get_basic(curr_iter, &value);
+				strcpy(key, value.str);
+				break;
+			case DBUS_TYPE_INT16 :
+				if(strcmp(key, "Volume") == 0) {
+					dbus_message_iter_get_basic(curr_iter, &value);
+					self->volume_in_db = value.i16;
+					DBG("DSD: Volume DB changed to %d", self->volume_in_db);
+				}
+				break;
+			case DBUS_TYPE_DOUBLE :
+				if(strcmp(key, "TuneVolume") == 0) {
+					dbus_message_iter_get_basic(curr_iter, &value);
+					self->volume = value.dbl;
+					DBG("DSD: Volume slider changed to %f", self->volume);
+				}
+				break;
+			default :
+				return FALSE;
+		}
+		dbus_message_iter_next(curr_iter);
+	}
+
+	return TRUE;
+}
+
+static gboolean volume_changed(DBusConnection *conn, DBusMessage *msg,
+		void *user_data)
+{
+	struct Self *self = user_data;
+	DBusMessageIter iter;
+	char key[32];
+
+	memset(key, '\0', 32);
+
+	dbus_message_iter_init(msg, &iter);
+
+	return set_volume_attr(&iter, key, self);
 }
 
 static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
@@ -214,6 +294,10 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 		error("D-Bus failed to register %s interface", AUI_MANAGER_INTERFACE);
 	}
 
+	self->volume_dbus_id = g_dbus_add_properties_watch(btd_get_dbus_connection(),
+			NULL, "/com/aether/Volume", "com.aether.Volume.Server",
+			volume_changed, self, NULL);
+
 	return 0;
 }
 
@@ -223,11 +307,13 @@ static void aui_adapter_remove(struct btd_profile *p, struct btd_adapter *adapte
 
 	DBG("DSD: path %s", path);
 
-	g_free(self);
-
 	g_dbus_unregister_interface(btd_get_dbus_connection(),
 			adapter_get_path(adapter),
 			AUI_MANAGER_INTERFACE);
+
+	g_dbus_remove_watch(btd_get_dbus_connection(), self->volume_dbus_id);
+
+	g_free(self);
 }
 
 static struct btd_profile aui_profile = {

@@ -19,6 +19,8 @@
 
 #define AUI_DEVID_UUID		"a8bb3a1f-0afa-463a-83ca-a10054087787"
 
+#define AUI_VOLUME_UUID		"ab3520da-d9ff-4d4c-ae61-8f01070c8344"
+
 
 /* D-Bus Interface */
 #define AUI_MANAGER_INTERFACE	"org.bluez.AuiManager1"

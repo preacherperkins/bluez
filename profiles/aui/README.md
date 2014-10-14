@@ -27,6 +27,10 @@ This is best described through a [JSON](http://json.org) representation.
   AUI_DEVID_UUID : {
     properties : READ,
     value : <DEV1234>
+  },
+  AUI_VOLUME_UUID : {
+    properties : READ,
+    value : <floating point 0 to 1>
   }
 }
 ```
@@ -38,6 +42,7 @@ Here are the defines for the AUI UUIDs.
 #define AUI_RCV_UUID      "409497e8-c42d-4870-aa4f-fe4e5b516410"
 #define AUI_SEND_UUID     "9e847894-d33c-4271-a3a5-bf7849fc0e03"
 #define AUI_DEVID_UUID    "a8bb3a1f-0afa-463a-83ca-a10054087787"
+#define AUI_VOLUME_UUID   "ab3520da-d9ff-4d4c-ae61-8f01070c8344"
 ```
 
 Here is the enumeration definition for actions.
@@ -183,10 +188,5 @@ __Note --disable-systemd is require if you're running ubuntu. If running on Fedo
 
 ## Issues
 
-* Current implementation attempts to disable advertising in the callback when
-the adapter is removed. This will always fail since bluez triggers this callback
-_after_ it disables the adapter
-
-* If there are multiple connections, advertisement will get enabled after only
-  one client disconnects
-
+* The volume characteristic will always return 0.0 until the user raises or
+  lowers the volume at least once after boot
