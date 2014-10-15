@@ -10,6 +10,19 @@
 #ifndef __AUI_H
 #define __AUI_H
 
+/* AUI Command Definition */
+enum {
+	NOP                = 255,
+	VOL_UP             = 10,
+	VOL_DOWN           = 11,
+	NEXT_TRACK         = 12,
+	PREV_TRACK         = 13,
+	NEXT_SET           = 14,
+	PREV_SET           = 15,
+	PLAY_PAUSE_TOGGLE  = 16
+};
+
+
 /* GATT Interface */
 #define AUI_SERVICE_UUID	"cf0244d6-5081-4e0a-8236-b486a3985162"
 

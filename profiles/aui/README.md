@@ -188,5 +188,3 @@ __Note --disable-systemd is require if you're running ubuntu. If running on Fedo
 
 ## Issues
 
-* The volume characteristic will always return 0.0 until the user raises or
-  lowers the volume at least once after boot

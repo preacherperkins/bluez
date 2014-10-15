@@ -2,7 +2,7 @@
 *
 *  Author: Dave S. Desrochers <dave.desrochers@aether.com>
 *
-* Copyright (c) 2014 Morse Project. All rights reserved.
+* Copyright (c) 2014 Aether Things. All rights reserved.
 *
 * @file Implements Aether User Interface (AUI) GATT server
 *
@@ -43,75 +43,21 @@
 
 #include "aui.h"
 
-enum {
-	NOP                = 255,
-	VOL_UP             = 10,
-	VOL_DOWN           = 11,
-	NEXT_TRACK         = 12,
-	PREV_TRACK         = 13,
-	NEXT_SET           = 14,
-	PREV_SET           = 15,
-	PLAY_PAUSE_TOGGLE  = 16
-};
-
 struct Self {
 	uint8_t aui_cmd;
 	struct btd_adapter *adapter;
-	double volume;
 	GDBusProxy *volumed_proxy;
 	GDBusClient *volumed_client;
-
 } *self;
 
-static gboolean aui_property_cmd(const GDBusPropertyTable *property,
-	DBusMessageIter *iter, void *data)
-{
-	struct Self *self = (struct Self*)data;
-
-	DBG("AUI: %s: New Cmd: %d", __FUNCTION__, self->aui_cmd);
-
-	dbus_message_iter_append_basic(iter, DBUS_TYPE_BYTE, &(self->aui_cmd));
-
-	return TRUE;
-}
-
-static DBusMessage *aui_register_watcher(DBusConnection *conn, DBusMessage *msg, void *data)
-{
-	DBG("AUI: %s", __FUNCTION__);
-
-	return dbus_message_new_method_return(msg);
-}
-
-static DBusMessage *aui_unregister_watcher(DBusConnection *conn, DBusMessage *msg,
-								void *data)
-{
-	DBG("AUI: %s", __FUNCTION__);
-
-	return dbus_message_new_method_return(msg);
-}
+static gboolean on_aui_dbus_cmd(const GDBusPropertyTable *, DBusMessageIter *, void *);
 
 static const GDBusPropertyTable aui_manager_properties[] = {
-	{ "RemoteCmd", "y", aui_property_cmd },
+	{ "RemoteCmd", "y", on_aui_dbus_cmd },
 	{ }
 };
 
-static const GDBusMethodTable aui_manager_methods[] = {
-	{
-		GDBUS_METHOD("RegisterWatcher",
-				GDBUS_ARGS({ "agent", "o" }),
-				NULL,
-				aui_register_watcher)
-	},
-	{
-		GDBUS_METHOD("UnregisterWatcher",
-				GDBUS_ARGS({ "agent", "o" }),
-				NULL,
-				aui_unregister_watcher)
-	},
-	{ }
-};
-
-static uint8_t aui_process_cmd(struct attribute *a, struct btd_device *device, gpointer user_data)
+static uint8_t on_aui_ble_cmd(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
 	struct Self *self = (struct Self*)user_data;
 
@@ -125,9 +71,9 @@ static uint8_t aui_process_cmd(struct attribute *a, struct btd_device *device, g
 	return 0;
 }
 
-static uint8_t aui_get_device_id(struct attribute *a, struct btd_device *device, gpointer user_data)
+static uint8_t on_aui_ble_get_device_id(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
-        struct Self *self = user_data;
+	struct Self *self = user_data;
 	uint8_t hostname[HOST_NAME_MAX + 1];
 
 	if(-1 == gethostname((char *)hostname, HOST_NAME_MAX)) {
@@ -141,7 +87,7 @@ static uint8_t aui_get_device_id(struct attribute *a, struct btd_device *device,
 	return 0;
 }
 
-static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *device, gpointer user_data)
+static uint8_t on_aui_ble_send_async_event(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
 	struct btd_adapter *adapter = user_data;
 	const char *garbage = "blablabla";
@@ -153,7 +99,7 @@ static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *
 	return 0;
 }
 
-static uint8_t aui_get_abs_volume(struct attribute *a, struct btd_device *device, gpointer user_data)
+static uint8_t on_aui_ble_get_abs_volume(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
 	struct Self *self = user_data;
 	DBusMessageIter iter;
@@ -175,7 +121,7 @@ static uint8_t aui_get_abs_volume(struct attribute *a, struct btd_device *device
 	return 0;
 }
 
-static gboolean register_aui_service(struct Self *self)
+static gboolean register_aui_ble_service(struct Self *self)
 {
 	bt_uuid_t srv_uuid, rcv_uuid, devid_uuid, send_uuid, volume_uuid;
 
@@ -192,26 +138,26 @@ static gboolean register_aui_service(struct Self *self)
 			GATT_OPT_CHR_UUID, &rcv_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_WRITE,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_WRITE,
-			aui_process_cmd, self,
+			on_aui_ble_cmd, self,
 
 			/* Device ID */
 			GATT_OPT_CHR_UUID, &devid_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			aui_get_device_id, self,
+			on_aui_ble_get_device_id, self,
 
 			/* Commands To Remote */
 			GATT_OPT_CHR_UUID, &send_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ |
 						GATT_CHR_PROP_NOTIFY,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			aui_send_event_to_remote, self,
+			on_aui_ble_send_async_event, self,
 
 			/* Absolute Volume */
 			GATT_OPT_CHR_UUID, &volume_uuid,
 			GATT_OPT_CHR_PROPS, GATT_CHR_PROP_READ,
 			GATT_OPT_CHR_VALUE_CB, ATTRIB_READ,
-			aui_get_abs_volume, self,
+			on_aui_ble_get_abs_volume, self,
 
 			GATT_OPT_INVALID);
 }
@@ -219,6 +165,18 @@ static gboolean register_aui_service(struct Self *self)
 static void aui_destroy_adapter(gpointer user_data)
 {
 	DBG("AUI: %s",__FUNCTION__);
+}
+
+static gboolean on_aui_dbus_cmd(const GDBusPropertyTable *property,
+		DBusMessageIter *iter, void *data)
+{
+	struct Self *self = (struct Self*)data;
+
+	DBG("AUI: %s: New Cmd: %d", __FUNCTION__, self->aui_cmd);
+
+	dbus_message_iter_append_basic(iter, DBUS_TYPE_BYTE, &(self->aui_cmd));
+
+	return TRUE;
 }
 
 static gboolean volumed_proxy_init(struct Self *self)
@@ -249,7 +207,7 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 	self->adapter = adapter;
 	self->aui_cmd = NOP;
 
-	if (!register_aui_service(self)) {
+	if (!register_aui_ble_service(self)) {
 		error("AUI could not be registered");
 		return -EIO;
 	}
@@ -257,7 +215,7 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 	if (!g_dbus_register_interface(btd_get_dbus_connection(),
 				adapter_get_path(adapter),
 				AUI_MANAGER_INTERFACE,
-				aui_manager_methods,          /* Methods    */
+				NULL,                         /* Methods    */
 				NULL,                         /* Signals    */
 				aui_manager_properties,       /* Properties */
 				self,                         /* User data  */
@@ -265,11 +223,11 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 		error("D-Bus failed to register %s interface", AUI_MANAGER_INTERFACE);
 	}
 
-  if (!volumed_proxy_init(self)) {
-    error("Could not connect to VolumeD");
-  }
+	if (!volumed_proxy_init(self)) {
+		error("Could not connect to VolumeD");
+	}
 
-  return 0;
+	return 0;
 }
 
 static void free_aui(struct Self *self)
@@ -311,4 +269,4 @@ static void aui_exit(void)
 }
 
 BLUETOOTH_PLUGIN_DEFINE(aui, VERSION, BLUETOOTH_PLUGIN_PRIORITY_LOW,
-					aui_init, aui_exit)
+		aui_init, aui_exit)
