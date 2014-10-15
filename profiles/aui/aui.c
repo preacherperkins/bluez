@@ -58,8 +58,9 @@ struct Self {
 	uint8_t aui_cmd;
 	struct btd_adapter *adapter;
 	double volume;
-	int16_t volume_in_db;
-	uint32_t volume_dbus_id;
+	GDBusProxy *volumed_proxy;
+	GDBusClient *volumed_client;
+
 } *self;
 
 static gboolean aui_property_cmd(const GDBusPropertyTable *property,
@@ -67,7 +68,7 @@ static gboolean aui_property_cmd(const GDBusPropertyTable *property,
 {
 	struct Self *self = (struct Self*)data;
 
-	DBG("DSD: %s: New Cmd: %d", __FUNCTION__, self->aui_cmd);
+	DBG("AUI: %s: New Cmd: %d", __FUNCTION__, self->aui_cmd);
 
 	dbus_message_iter_append_basic(iter, DBUS_TYPE_BYTE, &(self->aui_cmd));
 
@@ -76,7 +77,7 @@ static gboolean aui_property_cmd(const GDBusPropertyTable *property,
 
 static DBusMessage *aui_register_watcher(DBusConnection *conn, DBusMessage *msg, void *data)
 {
-	DBG("DSD: %s", __FUNCTION__);
+	DBG("AUI: %s", __FUNCTION__);
 
 	return dbus_message_new_method_return(msg);
 }
@@ -84,7 +85,7 @@ static DBusMessage *aui_register_watcher(DBusConnection *conn, DBusMessage *msg,
 static DBusMessage *aui_unregister_watcher(DBusConnection *conn, DBusMessage *msg,
 								void *data)
 {
-	DBG("DSD: %s", __FUNCTION__);
+	DBG("AUI: %s", __FUNCTION__);
 
 	return dbus_message_new_method_return(msg);
 }
@@ -114,7 +115,7 @@ static uint8_t aui_process_cmd(struct attribute *a, struct btd_device *device, g
 {
 	struct Self *self = (struct Self*)user_data;
 
-	DBG("DSD:  Processing command: 0x%x", *a->data);
+	DBG("AUI:  Processing command: 0x%x", *a->data);
 
 	self->aui_cmd = *a->data;
 
@@ -133,7 +134,7 @@ static uint8_t aui_get_device_id(struct attribute *a, struct btd_device *device,
 		return ATT_ECODE_IO;
 	}
 
-	DBG("DSD:  Returning hostname: '%s'", hostname);
+	DBG("AUI:  Returning hostname: '%s'", hostname);
 
 	attrib_db_update(self->adapter, a->handle, NULL, hostname, strlen((const char *)hostname), NULL);
 
@@ -145,7 +146,7 @@ static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *
 	struct btd_adapter *adapter = user_data;
 	const char *garbage = "blablabla";
 
-	DBG("DSD:  Sending async event to remote");
+	DBG("AUI:  Sending async event to remote");
 
 	attrib_db_update(adapter, a->handle, NULL, (uint8_t *)garbage, strlen(garbage), NULL);
 
@@ -155,13 +156,21 @@ static uint8_t aui_send_event_to_remote(struct attribute *a, struct btd_device *
 static uint8_t aui_get_abs_volume(struct attribute *a, struct btd_device *device, gpointer user_data)
 {
 	struct Self *self = user_data;
-	char volume[9];
+	DBusMessageIter iter;
+	double dbus_volume;
+	char btd_volume[9];
 
-	DBG("DSD: %s: Returning volume: '%f'", __FUNCTION__, self->volume);
+	if(!g_dbus_proxy_get_property(self->volumed_proxy, "TuneVolume", &iter)) {
+		error("AUI: ERROR: Could not get 'TuneVolume' property from VolumeD. Returning 0");
+		strcpy(btd_volume, "0.0");
+	}
+	else {
+		dbus_message_iter_get_basic(&iter, &dbus_volume);
+		sprintf(btd_volume, "%f", dbus_volume);
+	}
 
-	sprintf(volume, "%f", self->volume);
-
-	attrib_db_update(self->adapter, a->handle, NULL, volume, sizeof(volume), NULL);
+	DBG("AUI: %s: Returning volume: '%f'", __FUNCTION__, dbus_volume);
+	attrib_db_update(self->adapter, a->handle, NULL, btd_volume, sizeof(btd_volume), NULL);
 
 	return 0;
 }
@@ -209,70 +218,32 @@ static gboolean register_aui_service(struct Self *self)
 
 static void aui_destroy_adapter(gpointer user_data)
 {
-	DBG("DSD: %s",__FUNCTION__);
+	DBG("AUI: %s",__FUNCTION__);
 }
 
-static gboolean set_volume_attr(DBusMessageIter *curr_iter, const char *key, struct Self *self)
+static gboolean volumed_proxy_init(struct Self *self)
 {
-	int ctype;
-	DBusMessageIter new_iter;
-	DBusBasicValue value;
+	GDBusClient *client;
+	GDBusProxy  *proxy;
 
-	while((ctype = dbus_message_iter_get_arg_type(curr_iter)) != DBUS_TYPE_INVALID) {
+	client = g_dbus_client_new(btd_get_dbus_connection(), "com.aether.Volume", "/com/aether/Volume");
+	if (!client) {
+		return FALSE;
+	}
 
-		switch(ctype) {
-			case DBUS_TYPE_VARIANT :
-			case DBUS_TYPE_DICT_ENTRY :
-			case DBUS_TYPE_ARRAY :
-				dbus_message_iter_recurse(curr_iter, &new_iter);
-				set_volume_attr(&new_iter, key, self);
-				break;
-			case DBUS_TYPE_STRING :
-				dbus_message_iter_get_basic(curr_iter, &value);
-				strcpy(key, value.str);
-				break;
-			case DBUS_TYPE_INT16 :
-				if(strcmp(key, "Volume") == 0) {
-					dbus_message_iter_get_basic(curr_iter, &value);
-					self->volume_in_db = value.i16;
-					DBG("DSD: Volume DB changed to %d", self->volume_in_db);
-				}
-				break;
-			case DBUS_TYPE_DOUBLE :
-				if(strcmp(key, "TuneVolume") == 0) {
-					dbus_message_iter_get_basic(curr_iter, &value);
-					self->volume = value.dbl;
-					DBG("DSD: Volume slider changed to %f", self->volume);
-				}
-				break;
-			default :
-				return FALSE;
-		}
-		dbus_message_iter_next(curr_iter);
+	self->volumed_proxy = g_dbus_proxy_new(client, "/com/aether/Volume", "com.aether.Volume.Server");
+	if (!self->volumed_proxy) {
+		return FALSE;
 	}
 
 	return TRUE;
-}
-
-static gboolean volume_changed(DBusConnection *conn, DBusMessage *msg,
-		void *user_data)
-{
-	struct Self *self = user_data;
-	DBusMessageIter iter;
-	char key[32];
-
-	memset(key, '\0', 32);
-
-	dbus_message_iter_init(msg, &iter);
-
-	return set_volume_attr(&iter, key, self);
 }
 
 static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 {
 	const char *path = adapter_get_path(adapter);
 
-	DBG("DSD: path %s", path);
+	DBG("AUI: path %s", path);
 
 	self = g_new0(struct Self, 1);
 	self->adapter = adapter;
@@ -294,26 +265,31 @@ static int aui_adapter_init(struct btd_profile *p, struct btd_adapter *adapter)
 		error("D-Bus failed to register %s interface", AUI_MANAGER_INTERFACE);
 	}
 
-	self->volume_dbus_id = g_dbus_add_properties_watch(btd_get_dbus_connection(),
-			NULL, "/com/aether/Volume", "com.aether.Volume.Server",
-			volume_changed, self, NULL);
+  if (!volumed_proxy_init(self)) {
+    error("Could not connect to VolumeD");
+  }
 
-	return 0;
+  return 0;
+}
+
+static void free_aui(struct Self *self)
+{
+	g_dbus_client_unref(self->volumed_client);
+	g_dbus_proxy_unref(self->volumed_proxy);
+	g_free(self);
 }
 
 static void aui_adapter_remove(struct btd_profile *p, struct btd_adapter *adapter)
 {
 	const char *path = adapter_get_path(adapter);
 
-	DBG("DSD: path %s", path);
+	DBG("AUI: path %s", path);
 
 	g_dbus_unregister_interface(btd_get_dbus_connection(),
 			adapter_get_path(adapter),
 			AUI_MANAGER_INTERFACE);
 
-	g_dbus_remove_watch(btd_get_dbus_connection(), self->volume_dbus_id);
-
-	g_free(self);
+	free_aui(self);
 }
 
 static struct btd_profile aui_profile = {
