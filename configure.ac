@@ -126,7 +126,8 @@ AC_ARG_ENABLE(udev, AC_HELP_STRING([--disable-udev],
 		[disable udev device support]), [enable_udev=${enableval}])
 if (test "${enable_tools}" != "no" && test "${enable_udev}" != "no"); then
 	PKG_CHECK_MODULES(UDEV, libudev >= 172, dummy=yes,
-				AC_MSG_ERROR(libudev >= 172 is required))
+                                PKG_CHECK_MODULES(UDEV, udev >= 208, dummy=yes,
+                                        AC_MSG_ERROR(libudev >= 172 is required)))
 	AC_SUBST(UDEV_CFLAGS)
 	AC_SUBST(UDEV_LIBS)
 	AC_CHECK_LIB(udev, udev_hwdb_new,
