@@ -46,3 +46,37 @@
     <property name="Name" type="s" access="read"></property>
     <property name="NumberOfItems" type="u" access="read"></property>
 </interface>
+<interface name="org.bluez.MediaEndpoint1">
+    <method name="SetConfiguration">
+        <arg name="transport" direction="in" type="o"/>
+        <arg name="properties" direction="in" type="ay"/>
+    </method>
+    <method name="SelectConfiguration">
+        <arg name="capabilities" direction="in" type="ay"/>
+        <arg name="configuration" direction="out" type="ay"/>
+    </method>
+    <method name="ClearConfiguration">
+        <arg name="transport" direction="in" type="o"/>
+    </method>
+    <method name="Release">
+    </method>
+</interface>
+<interface name="org.bluez.MediaTransport1">
+    <method name="Acquire"><arg name="fd" type="h" direction="out"/>
+        <arg name="mtu_r" type="q" direction="out"/>
+        <arg name="mtu_w" type="q" direction="out"/>
+    </method>
+    <method name="TryAcquire">
+        <arg name="fd" type="h" direction="out"/>
+        <arg name="mtu_r" type="q" direction="out"/>
+        <arg name="mtu_w" type="q" direction="out"/>
+    </method>
+    <method name="Release"></method>
+    <property name="Device" type="o" access="read"></property>
+    <property name="UUID" type="s" access="read"></property>
+    <property name="Codec" type="y" access="read"></property>
+    <property name="Configuration" type="ay" access="read"></property>
+    <property name="State" type="s" access="read"></property>
+    <property name="Delay" type="q" access="read"></property>
+    <property name="Volume" type="q" access="readwrite"></property>
+</interface>
