@@ -49,7 +49,7 @@
 <interface name="org.bluez.MediaEndpoint1">
     <method name="SetConfiguration">
         <arg name="transport" direction="in" type="o"/>
-        <arg name="properties" direction="in" type="ay"/>
+        <arg name="properties" direction="in" type="a{sv}"/>
     </method>
     <method name="SelectConfiguration">
         <arg name="capabilities" direction="in" type="ay"/>
