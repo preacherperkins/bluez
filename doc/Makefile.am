@@ -1,4 +1,4 @@
-XML_SOURCES = \
+XMLSOURCES = \
 	adapter-api.xml \
 	agent-api.xml \
 	device-api.xml \
@@ -8,8 +8,8 @@ XML_SOURCES = \
 	profile-api.xml \
 	arc-api.xml
 
-org.bluez.xml: $(XML_SOURCES) head.xml foot.xml
-	cat head.xml $(XML_SOURCES) foot.xml > $@
+org.bluez.xml: $(XMLSOURCES) head.xml foot.xml
+	cat head.xml $(XMLSOURCES) foot.xml > $@
 
 DBUS_IFACES     = org.bluez.xml
 dbus_ifacedir   = $(datadir)/dbus-1/interfaces
