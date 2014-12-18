@@ -1,3 +1,4 @@
+SUBDIRS = doc
 
 AM_MAKEFLAGS = --no-print-directory
 
@@ -80,7 +81,7 @@ include_HEADERS += $(lib_headers)
 lib_LTLIBRARIES += lib/libbluetooth.la
 
 lib_libbluetooth_la_SOURCES = $(lib_headers) $(lib_sources)
-lib_libbluetooth_la_LDFLAGS = $(AM_LDFLAGS) -version-info 20:1:17
+lib_libbluetooth_la_LDFLAGS = $(AM_LDFLAGS) -version-info 20:11:17
 lib_libbluetooth_la_DEPENDENCIES = $(local_headers)
 endif
 
@@ -98,7 +99,8 @@ gdbus_libgdbus_internal_la_SOURCES = gdbus/gdbus.h \
 attrib_sources = attrib/att.h attrib/att-database.h attrib/att.c \
 		attrib/gatt.h attrib/gatt.c \
 		attrib/gattrib.h attrib/gattrib.c \
-		attrib/gatt-service.h attrib/gatt-service.c
+		attrib/gatt-service.h attrib/gatt-service.c \
+		src/shared/crypto.h src/shared/crypto.c
 
 btio_sources = btio/btio.h btio/btio.c
 
@@ -137,7 +139,7 @@ src_bluetoothd_SOURCES = $(builtin_sources) \
 			src/sdp-xml.h src/sdp-xml.c \
 			src/sdp-client.h src/sdp-client.c \
 			src/textfile.h src/textfile.c \
-			src/glib-helper.h src/glib-helper.c \
+			src/uuid-helper.h src/uuid-helper.c \
 			src/uinput.h \
 			src/plugin.h src/plugin.c \
 			src/storage.h src/storage.c \
@@ -146,11 +148,19 @@ src_bluetoothd_SOURCES = $(builtin_sources) \
 			src/adapter.h src/adapter.c \
 			src/profile.h src/profile.c \
 			src/service.h src/service.c \
+			src/gatt-dbus.h src/gatt-dbus.c \
+			src/gatt.h src/gatt.c \
 			src/device.h src/device.c src/attio.h \
 			src/dbus-common.c src/dbus-common.h \
 			src/eir.h src/eir.c \
+			src/shared/io.h src/shared/io-glib.c \
+			src/shared/timeout.h src/shared/timeout-glib.c \
+			src/shared/queue.h src/shared/queue.c \
 			src/shared/util.h src/shared/util.c \
-			src/shared/mgmt.h src/shared/mgmt.c
+			src/shared/mgmt.h src/shared/mgmt.c \
+			src/shared/att-types.h src/shared/att.h src/shared/att.c \
+			src/shared/gatt-helpers.h src/shared/gatt-helpers.c \
+			src/shared/gatt-client.h src/shared/gatt-client.c
 src_bluetoothd_LDADD = lib/libbluetooth-internal.la gdbus/libgdbus-internal.la \
 			@GLIB_LIBS@ @DBUS_LIBS@ -ldl
 src_bluetoothd_LDFLAGS = $(AM_LDFLAGS) -Wl,--export-dynamic \
@@ -176,10 +186,11 @@ EXTRA_DIST += src/genbuiltin src/bluetooth.conf \
 			profiles/input/input.conf profiles/proximity/proximity.conf
 
 test_scripts =
+unit_tests =
 
 include Makefile.tools
 include Makefile.obexd
-include Makefile.android
+include android/Makefile.am
 
 if HID2HCI
 rulesdir = @UDEV_DIR@/rules.d
@@ -198,7 +209,8 @@ endif
 
 EXTRA_DIST += $(test_scripts)
 
-EXTRA_DIST += doc/assigned-numbers.txt doc/supported-features.txt
+EXTRA_DIST += doc/assigned-numbers.txt doc/supported-features.txt \
+				doc/test-coverage.txt doc/settings-storage.txt
 
 EXTRA_DIST += doc/mgmt-api.txt \
 		doc/adapter-api.txt doc/device-api.txt \
@@ -216,13 +228,13 @@ EXTRA_DIST += tools/magic.btsnoop
 
 AM_CFLAGS += @DBUS_CFLAGS@ @GLIB_CFLAGS@
 
-AM_CPPFLAGS = -I$(builddir)/lib -I$(builddir)/src -I$(srcdir)/src \
-			-I$(srcdir)/gdbus -I$(srcdir)/btio
+AM_CPPFLAGS = -I$(builddir)/lib -I$(srcdir)/gdbus
 
 
-unit_tests = unit/test-eir unit/test-uuid unit/test-textfile unit/test-crc
+unit_tests += unit/test-eir unit/test-uuid unit/test-textfile unit/test-crc \
+							 unit/test-crypto
 
-unit_test_eir_SOURCES = unit/test-eir.c src/eir.c src/glib-helper.c
+unit_test_eir_SOURCES = unit/test-eir.c src/eir.c src/uuid-helper.c
 unit_test_eir_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
 
 unit_test_uuid_SOURCES = unit/test-uuid.c
@@ -234,20 +246,85 @@ unit_test_textfile_LDADD = @GLIB_LIBS@
 unit_test_crc_SOURCES = unit/test-crc.c monitor/crc.h monitor/crc.c
 unit_test_crc_LDADD = @GLIB_LIBS@
 
+unit_test_crypto_SOURCES = unit/test-crypto.c \
+				src/shared/crypto.h src/shared/crypto.c
+unit_test_crypto_LDADD = @GLIB_LIBS@
+
+unit_tests += unit/test-ringbuf unit/test-queue
+
+unit_test_ringbuf_SOURCES = unit/test-ringbuf.c \
+				src/shared/util.h src/shared/util.c \
+				src/shared/ringbuf.h src/shared/ringbuf.c
+unit_test_ringbuf_LDADD = @GLIB_LIBS@
+
+unit_test_queue_SOURCES = unit/test-queue.c \
+				src/shared/util.h src/shared/util.c \
+				src/shared/queue.h src/shared/queue.c
+unit_test_queue_LDADD = @GLIB_LIBS@
+
 unit_tests += unit/test-mgmt
 
 unit_test_mgmt_SOURCES = unit/test-mgmt.c \
+				src/shared/io.h src/shared/io-glib.c \
+				src/shared/queue.h src/shared/queue.c \
 				src/shared/util.h src/shared/util.c \
 				src/shared/mgmt.h src/shared/mgmt.c
 unit_test_mgmt_LDADD = @GLIB_LIBS@
+
+unit_tests += unit/test-uhid
+
+unit_test_uhid_SOURCES = unit/test-uhid.c \
+				src/shared/uhid.h src/shared/uhid.c \
+				src/shared/io.h src/shared/io-glib.c \
+				src/shared/util.h src/shared/util.c \
+				src/shared/queue.h src/shared/queue.c
+unit_test_uhid_LDADD = @GLIB_LIBS@
 
 unit_tests += unit/test-sdp
 
 unit_test_sdp_SOURCES = unit/test-sdp.c \
 				src/shared/util.h src/shared/util.c \
 				src/sdpd.h src/sdpd-database.c \
+				src/log.h src/log.c \
 				src/sdpd-service.c src/sdpd-request.c
 unit_test_sdp_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
+
+unit_tests += unit/test-avdtp
+
+unit_test_avdtp_SOURCES = unit/test-avdtp.c \
+				src/shared/util.h src/shared/util.c \
+				src/log.h src/log.c \
+				android/avdtp.c android/avdtp.h
+unit_test_avdtp_LDADD = @GLIB_LIBS@
+
+unit_tests += unit/test-avctp
+
+unit_test_avctp_SOURCES = unit/test-avctp.c \
+				src/shared/util.h src/shared/util.c \
+				src/log.h src/log.c \
+				android/avctp.c android/avctp.h
+unit_test_avctp_LDADD = @GLIB_LIBS@
+
+unit_tests += unit/test-avrcp
+
+unit_test_avrcp_SOURCES = unit/test-avrcp.c \
+				src/shared/util.h src/shared/util.c \
+				src/log.h src/log.c \
+				android/avctp.c android/avctp.h \
+				android/avrcp-lib.c android/avrcp-lib.h
+unit_test_avrcp_LDADD = @GLIB_LIBS@ lib/libbluetooth-internal.la
+
+unit_tests += unit/test-hfp
+
+unit_test_hfp_SOURCES = unit/test-hfp.c \
+				src/shared/io.h src/shared/io-glib.c \
+				src/shared/queue.h src/shared/queue.c \
+				src/shared/util.h src/shared/util.c \
+				src/shared/mgmt.h src/shared/mgmt.c \
+				src/shared/ringbuf.h src/shared/ringbuf.c \
+				src/shared/hfp.h src/shared/hfp.c
+
+unit_test_hfp_LDADD = @GLIB_LIBS@
 
 unit_tests += unit/test-gdbus-client
 
@@ -293,11 +370,19 @@ if LIBRARY
 pkgconfig_DATA = lib/bluez.pc
 endif
 
-DISTCHECK_CONFIGURE_FLAGS = --disable-datafiles --enable-library \
-					--disable-systemd --disable-udev \
-					--enable-android
+manual_pages = doc/btmon.1
 
-DISTCLEANFILES = $(pkgconfig_DATA)
+if MANPAGES
+dist_noinst_MANS += $(manual_pages)
+endif
+
+EXTRA_DIST += $(manual_pages:.1=.txt)
+
+DISTCHECK_CONFIGURE_FLAGS = --disable-datafiles --enable-library \
+					--enable-manpages \
+					--disable-systemd --disable-udev
+
+DISTCLEANFILES = $(pkgconfig_DATA) $(manual_pages)
 
 MAINTAINERCLEANFILES = Makefile.in \
 	aclocal.m4 configure config.h.in config.sub config.guess \
@@ -310,6 +395,9 @@ SED_PROCESS = $(AM_V_GEN)$(MKDIR_P) $(dir $@) && \
 %.service: %.service.in Makefile
 	$(SED_PROCESS)
 
+%.1: %.txt
+	$(AM_V_GEN)a2x --doctype manpage --format manpage $(srcdir)/$<
+
 src/builtin.h: src/genbuiltin $(builtin_sources)
 	$(AM_V_GEN)$(srcdir)/src/genbuiltin $(builtin_modules) > $@
 
@@ -320,7 +408,7 @@ $(lib_libbluetooth_la_OBJECTS): $(local_headers)
 
 lib/bluetooth/%.h: lib/%.h
 	$(AM_V_at)$(MKDIR_P) lib/bluetooth
-	$(AM_V_GEN)$(LN_S) -f $(abs_top_builddir)/$< $@
+	$(AM_V_GEN)$(LN_S) -f "$(abs_top_builddir)"/$< $@
 
 clean-local:
 	$(RM) -r lib/bluetooth

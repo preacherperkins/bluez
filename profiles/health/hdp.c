@@ -27,19 +27,20 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <sdpd.h>
 #include <unistd.h>
 
 #include <glib.h>
 
+#include <bluetooth/bluetooth.h>
 #include <bluetooth/l2cap.h>
 #include <gdbus/gdbus.h>
-#include <dbus-common.h>
-#include <log.h>
-#include <error.h>
-#include <adapter.h>
-#include <device.h>
-#include <btio/btio.h>
+#include "src/dbus-common.h"
+#include "src/log.h"
+#include "src/error.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/sdpd.h"
+#include "btio/btio.h"
 
 #include "mcap_lib.h"
 #include "hdp_types.h"
@@ -90,7 +91,7 @@ static struct hdp_channel *hdp_channel_ref(struct hdp_channel *chan)
 
 	chan->ref++;
 
-	DBG("health_channel_ref(%p): ref=%d", chan, chan->ref);
+	DBG("(%p): ref=%d", chan, chan->ref);
 	return chan;
 }
 
@@ -114,7 +115,7 @@ static void hdp_channel_unref(struct hdp_channel *chan)
 		return;
 
 	chan->ref --;
-	DBG("health_channel_unref(%p): ref=%d", chan, chan->ref);
+	DBG("(%p): ref=%d", chan, chan->ref);
 
 	if (chan->ref > 0)
 		return;
@@ -135,7 +136,7 @@ static struct hdp_create_dc *hdp_create_data_ref(struct hdp_create_dc *dc_data)
 {
 	dc_data->ref++;
 
-	DBG("hdp_create_data_ref(%p): ref=%d", dc_data, dc_data->ref);
+	DBG("(%p): ref=%d", dc_data, dc_data->ref);
 
 	return dc_data;
 }
@@ -144,7 +145,7 @@ static void hdp_create_data_unref(struct hdp_create_dc *dc_data)
 {
 	dc_data->ref--;
 
-	DBG("hdp_create_data_unref(%p): ref=%d", dc_data, dc_data->ref);
+	DBG("(%p): ref=%d", dc_data, dc_data->ref);
 
 	if (dc_data->ref > 0)
 		return;
@@ -746,8 +747,11 @@ static struct hdp_channel *create_channel(struct hdp_device *dev,
 {
 	struct hdp_channel *hdp_chann;
 
-	if (dev == NULL)
+	if (dev == NULL) {
+		g_set_error(err, HDP_ERROR, HDP_UNSPECIFIED_ERROR,
+					"HDP device uninitialized");
 		return NULL;
+	}
 
 	hdp_chann = g_new0(struct hdp_channel, 1);
 	hdp_chann->config = config;
@@ -859,7 +863,10 @@ static gboolean serve_echo(GIOChannel *io_chan, GIOCondition cond,
 	chan->edata->echo_done = TRUE;
 
 	fd = g_io_channel_unix_get_fd(io_chan);
+
 	len = read(fd, buf, sizeof(buf));
+	if (len < 0)
+		goto fail;
 
 	if (send_echo_data(fd, buf, len)  >= 0)
 		return TRUE;
@@ -929,7 +936,8 @@ static void hdp_mcap_mdl_connected_cb(struct mcap_mdl *mdl, void *data)
 	struct hdp_device *dev = data;
 	struct hdp_channel *chan;
 
-	DBG("hdp_mcap_mdl_connected_cb");
+	DBG("");
+
 	if (dev->ndc == NULL)
 		return;
 
@@ -985,7 +993,7 @@ static void hdp_mcap_mdl_closed_cb(struct mcap_mdl *mdl, void *data)
 {
 	/* struct hdp_device *dev = data; */
 
-	DBG("hdp_mcap_mdl_closed_cb");
+	DBG("");
 
 	/* Nothing to do */
 }
@@ -997,7 +1005,8 @@ static void hdp_mcap_mdl_deleted_cb(struct mcap_mdl *mdl, void *data)
 	char *path;
 	GSList *l;
 
-	DBG("hdp_mcap_mdl_deleted_cb");
+	DBG("");
+
 	l = g_slist_find_custom(dev->channels, mdl, cmp_chan_mdl);
 	if (l == NULL)
 		return;
@@ -1015,7 +1024,8 @@ static void hdp_mcap_mdl_aborted_cb(struct mcap_mdl *mdl, void *data)
 {
 	struct hdp_device *dev = data;
 
-	DBG("hdp_mcap_mdl_aborted_cb");
+	DBG("");
+
 	if (dev->ndc == NULL)
 		return;
 
@@ -1056,6 +1066,7 @@ static uint8_t hdp_mcap_mdl_conn_req_cb(struct mcap_mcl *mcl, uint8_t mdepid,
 		switch (*conf) {
 		case HDP_NO_PREFERENCE_DC:
 			*conf = HDP_RELIABLE_DC;
+			break;
 		case HDP_RELIABLE_DC:
 			break;
 		case HDP_STREAMING_DC:
@@ -1102,6 +1113,7 @@ static uint8_t hdp_mcap_mdl_conn_req_cb(struct mcap_mcl *mcl, uint8_t mdepid,
 	case HDP_STREAMING_DC:
 		if (!dev->fr || app->role == HDP_SOURCE)
 			return MCAP_CONFIGURATION_REJECTED;
+		break;
 	case HDP_RELIABLE_DC:
 		if (app->role == HDP_SOURCE)
 			return MCAP_CONFIGURATION_REJECTED;
@@ -1183,7 +1195,6 @@ gboolean hdp_set_mcl_cb(struct hdp_device *device, GError **err)
 		MCAP_MDL_CB_REMOTE_CONN_REQ, hdp_mcap_mdl_conn_req_cb,
 		MCAP_MDL_CB_REMOTE_RECONN_REQ, hdp_mcap_mdl_reconn_req_cb,
 		MCAP_MDL_CB_INVALID);
-
 	if (ret)
 		return TRUE;
 
@@ -1205,8 +1216,8 @@ static void mcl_connected(struct mcap_mcl *mcl, gpointer data)
 		struct hdp_adapter *hdp_adapter = data;
 		struct btd_device *device;
 
-		device = adapter_get_device(hdp_adapter->btd_adapter, &addr,
-								BDADDR_BREDR);
+		device = btd_adapter_get_device(hdp_adapter->btd_adapter,
+							&addr, BDADDR_BREDR);
 		if (!device)
 			return;
 		hdp_device = create_health_device(device);
@@ -1322,6 +1333,7 @@ static void release_adapter_instance(struct hdp_adapter *hdp_adapter)
 static gboolean update_adapter(struct hdp_adapter *hdp_adapter)
 {
 	GError *err = NULL;
+	const bdaddr_t *src;
 
 	if (applications == NULL) {
 		release_adapter_instance(hdp_adapter);
@@ -1331,14 +1343,14 @@ static gboolean update_adapter(struct hdp_adapter *hdp_adapter)
 	if (hdp_adapter->mi != NULL)
 		goto update;
 
-	hdp_adapter->mi = mcap_create_instance(
-				adapter_get_address(hdp_adapter->btd_adapter),
+	src = btd_adapter_get_address(hdp_adapter->btd_adapter);
+
+	hdp_adapter->mi = mcap_create_instance(src,
 				BT_IO_SEC_MEDIUM, 0, 0,
 				mcl_connected, mcl_reconnected,
 				mcl_disconnected, mcl_uncached,
 				NULL, /* CSP is not used by now */
 				hdp_adapter, &err);
-
 	if (hdp_adapter->mi == NULL) {
 		error("Error creating the MCAP instance: %s", err->message);
 		g_error_free(err);
@@ -1498,8 +1510,8 @@ static gboolean check_echo(GIOChannel *io_chan, GIOCondition cond,
 	}
 
 	fd = g_io_channel_unix_get_fd(io_chan);
-	len = read(fd, buf, sizeof(buf));
 
+	len = read(fd, buf, sizeof(buf));
 	if (len != HDP_ECHO_LEN) {
 		value = FALSE;
 		goto end;
@@ -1839,7 +1851,7 @@ static DBusMessage *device_echo(DBusConnection *conn,
 	data->cb = hdp_echo_connect_cb;
 	hdp_create_data_ref(data);
 
-	if (device->mcl_conn && device->mcl != NULL) {
+	if (device->mcl_conn && device->mcl) {
 		if (mcap_create_mdl(device->mcl, data->mdep, data->config,
 						device_create_mdl_cb, data,
 						destroy_create_dc_data, &err))
@@ -2142,7 +2154,8 @@ static struct hdp_device *create_health_device(struct btd_device *device)
 	if (!g_dbus_register_interface(btd_get_dbus_connection(),
 					path, HEALTH_DEVICE,
 					health_device_methods,
-					health_device_signals, NULL,
+					health_device_signals,
+					health_device_properties,
 					dev, health_device_destroy)) {
 		error("D-Bus failed to register %s interface", HEALTH_DEVICE);
 		goto fail;
@@ -2221,7 +2234,7 @@ struct hdp_device *health_device_ref(struct hdp_device *hdp_dev)
 {
 	hdp_dev->ref++;
 
-	DBG("health_device_ref(%p): ref=%d", hdp_dev, hdp_dev->ref);
+	DBG("(%p): ref=%d", hdp_dev, hdp_dev->ref);
 
 	return hdp_dev;
 }
@@ -2230,7 +2243,7 @@ void health_device_unref(struct hdp_device *hdp_dev)
 {
 	hdp_dev->ref--;
 
-	DBG("health_device_unref(%p): ref=%d", hdp_dev, hdp_dev->ref);
+	DBG("(%p): ref=%d", hdp_dev, hdp_dev->ref);
 
 	if (hdp_dev->ref > 0)
 		return;

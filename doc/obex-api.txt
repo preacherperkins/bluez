@@ -90,12 +90,34 @@ Methods		void Cancel()
 					 org.bluez.obex.Error.InProgress
 					 org.bluez.obex.Error.Failed
 
+		void Suspend()
+
+			Suspend transference.
+
+			Possible errors: org.bluez.obex.Error.NotAuthorized
+					 org.bluez.obex.Error.NotInProgress
+
+			Note that it is not possible to suspend transfers
+			which are queued which is why NotInProgress is listed
+			as possible error.
+
+		void Resume()
+
+			Resume transference.
+
+			Possible errors: org.bluez.obex.Error.NotAuthorized
+					 org.bluez.obex.Error.NotInProgress
+
+			Note that it is not possible to resume transfers
+			which are queued which is why NotInProgress is listed
+			as possible error.
+
 Properties	string Status [readonly]
 
 			Inform the current status of the transfer.
 
-			Possible values: "queued", "active", "complete" or
-					"error"
+			Possible values: "queued", "active", "suspended",
+					"complete" or "error"
 
 		object Session [readonly]
 
@@ -409,6 +431,14 @@ Methods		void Select(string location, string phonebook)
 			Possible errors: org.bluez.obex.Error.Forbidden
 					 org.bluez.obex.Error.Failed
 
+		uint16, uint16 GetVersion()
+
+			Return the primary and secondary folder version counters
+			for the selected phonebook.
+
+			Possible errors: org.bluez.obex.Error.Forbidden
+					 org.bluez.obex.Error.Failed
+
 		array{string} ListFilterFields()
 
 			Return All Available fields that can be used in Fields
@@ -442,6 +472,28 @@ Filter:		string Format:
 			Item vcard fields, default is all values.
 
 			Possible values can be query with ListFilterFields.
+
+		array{string} FilterBy:
+
+			Filter items by fields. Default do not filter by
+			fields.
+
+			Possible values can be query with ListFilterFields
+			excluding the first item that must be either '&' or
+			'|' that apply AND or OR logic respectively.
+
+		bool ResetNewMissedCalls
+
+			Reset new the missed calls items, shall only be used
+			for folders mch and cch.
+
+Properties	string Folder [readonly]
+
+			Current folder.
+
+		string DatabaseIdentifier [readonly, optional]
+
+			128 bits persistent identifier.
 
 
 Synchronization hierarchy

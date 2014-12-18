@@ -34,25 +34,27 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include "uhid_copy.h"
 
 #include <bluetooth/bluetooth.h>
 
 #include <glib.h>
 
-#include "log.h"
+#include "src/log.h"
 
 #include "lib/uuid.h"
 #include "src/adapter.h"
 #include "src/device.h"
 #include "src/profile.h"
 #include "src/service.h"
+#include "src/shared/util.h"
+#include "src/shared/uhid.h"
 
-#include "plugin.h"
+#include "src/plugin.h"
+
 #include "suspend.h"
 #include "attrib/att.h"
 #include "attrib/gattrib.h"
-#include "attio.h"
+#include "src/attio.h"
 #include "attrib/gatt.h"
 
 #define HOG_UUID		"00001812-0000-1000-8000-00805f9b34fb"
@@ -70,10 +72,9 @@
 #define HOG_PROTO_MODE_BOOT    0
 #define HOG_PROTO_MODE_REPORT  1
 
-#define UHID_DEVICE_FILE	"/dev/uhid"
-
 #define HOG_REPORT_MAP_MAX_SIZE        512
 #define HID_INFO_SIZE			4
+#define ATT_NOTIFICATION_HEADER_SIZE	3
 
 struct hog_device {
 	uint16_t		id;
@@ -82,9 +83,8 @@ struct hog_device {
 	guint			attioid;
 	struct gatt_primary	*hog_primary;
 	GSList			*reports;
-	int			uhid_fd;
+	struct bt_uhid		*uhid;
 	gboolean		has_report_id;
-	guint			uhid_watch_id;
 	uint16_t		bcdhid;
 	uint8_t			bcountrycode;
 	uint16_t		proto_mode_handle;
@@ -100,46 +100,47 @@ struct report {
 	struct hog_device	*hogdev;
 };
 
-struct disc_desc_cb_data {
-	uint16_t end;
-	gpointer data;
-};
-
 static gboolean suspend_supported = FALSE;
 static GSList *devices = NULL;
 
-static void report_value_cb(const uint8_t *pdu, uint16_t len,
-							gpointer user_data)
+static void report_value_cb(const guint8 *pdu, guint16 len, gpointer user_data)
 {
 	struct report *report = user_data;
 	struct hog_device *hogdev = report->hogdev;
 	struct uhid_event ev;
-	uint16_t report_size = len - 3;
 	uint8_t *buf;
+	int err;
 
-	if (len < 3) { /* 1-byte opcode + 2-byte handle */
+	if (len < ATT_NOTIFICATION_HEADER_SIZE) {
 		error("Malformed ATT notification");
 		return;
 	}
 
+	pdu += ATT_NOTIFICATION_HEADER_SIZE;
+	len -= ATT_NOTIFICATION_HEADER_SIZE;
+
 	memset(&ev, 0, sizeof(ev));
 	ev.type = UHID_INPUT;
-	ev.u.input.size = MIN(report_size, UHID_DATA_MAX);
-
 	buf = ev.u.input.data;
+
 	if (hogdev->has_report_id) {
-		*buf = report->id;
-		buf++;
-		ev.u.input.size++;
+		buf[0] = report->id;
+		len = MIN(len, sizeof(ev.u.input.data) - 1);
+		memcpy(buf + 1, pdu, len);
+		ev.u.input.size = ++len;
+	} else {
+		len = MIN(len, sizeof(ev.u.input.data));
+		memcpy(buf, pdu, len);
+		ev.u.input.size = len;
 	}
 
-	memcpy(buf, &pdu[3], MIN(report_size, UHID_DATA_MAX));
+	err = bt_uhid_send(hogdev->uhid, &ev);
+	if (err < 0) {
+		error("bt_uhid_send: %s (%d)", strerror(-err), -err);
+		return;
+	}
 
-	if (write(hogdev->uhid_fd, &ev, sizeof(ev)) < 0)
-		error("uHID write failed: %s", strerror(errno));
-	else
-		DBG("Report from HoG device 0x%04X written to uHID fd %d",
-						hogdev->id, hogdev->uhid_fd);
+	DBG("HoG report (%u bytes)", ev.u.input.size);
 }
 
 static void report_ccc_written_cb(guint8 status, const guint8 *pdu,
@@ -197,94 +198,56 @@ static void external_report_reference_cb(guint8 status, const guint8 *pdu,
 					guint16 plen, gpointer user_data);
 
 
-static void discover_descriptor_cb(guint8 status, const guint8 *pdu,
-					guint16 len, gpointer user_data)
+static void discover_descriptor_cb(uint8_t status, GSList *descs,
+								void *user_data)
 {
-	struct disc_desc_cb_data *ddcb_data = user_data;
 	struct report *report;
 	struct hog_device *hogdev;
-	struct att_data_list *list = NULL;
 	GAttrib *attrib = NULL;
-	uint8_t format;
-	uint16_t handle = 0xffff;
-	uint16_t end = ddcb_data->end;
-	int i;
-
-	if (status == ATT_ECODE_ATTR_NOT_FOUND) {
-		DBG("Discover all characteristic descriptors finished");
-		goto done;
-	}
 
 	if (status != 0) {
-		error("Discover all characteristic descriptors failed: %s",
+		error("Discover all descriptors failed: %s",
 							att_ecode2str(status));
-		goto done;
+		return;
 	}
 
-	list = dec_find_info_resp(pdu, len, &format);
-	if (list == NULL)
-		return;
+	for ( ; descs; descs = descs->next) {
+		struct gatt_desc *desc = descs->data;
 
-	if (format != ATT_FIND_INFO_RESP_FMT_16BIT)
-		goto done;
-
-	for (i = 0; i < list->num; i++) {
-		uint16_t uuid16;
-		uint8_t *value;
-
-		value = list->data[i];
-		handle = att_get_u16(value);
-		uuid16 = att_get_u16(&value[2]);
-
-		switch (uuid16) {
+		switch (desc->uuid16) {
 		case GATT_CLIENT_CHARAC_CFG_UUID:
-			report = ddcb_data->data;
+			report = user_data;
 			attrib = report->hogdev->attrib;
-			write_ccc(handle, report);
+			write_ccc(desc->handle, report);
 			break;
 		case GATT_REPORT_REFERENCE:
-			report = ddcb_data->data;
+			report = user_data;
 			attrib = report->hogdev->attrib;
-			gatt_read_char(attrib, handle,
+			gatt_read_char(attrib, desc->handle,
 						report_reference_cb, report);
 			break;
 		case GATT_EXTERNAL_REPORT_REFERENCE:
-			hogdev = ddcb_data->data;
+			hogdev = user_data;
 			attrib = hogdev->attrib;
-			gatt_read_char(attrib, handle,
+			gatt_read_char(attrib, desc->handle,
 					external_report_reference_cb, hogdev);
 			break;
 		}
 	}
-
-done:
-	att_data_list_free(list);
-
-	if (handle != 0xffff && handle < end)
-		gatt_discover_char_desc(attrib, handle + 1, end,
-					discover_descriptor_cb, ddcb_data);
-	else
-		g_free(ddcb_data);
 }
 
 static void discover_descriptor(GAttrib *attrib, uint16_t start, uint16_t end,
 							gpointer user_data)
 {
-	struct disc_desc_cb_data *ddcb_data;
-
 	if (start > end)
 		return;
 
-	ddcb_data = g_new0(struct disc_desc_cb_data, 1);
-	ddcb_data->end = end;
-	ddcb_data->data = user_data;
-
-	gatt_discover_char_desc(attrib, start, end, discover_descriptor_cb,
-								ddcb_data);
+	gatt_discover_desc(attrib, start, end, NULL,
+					discover_descriptor_cb, user_data);
 }
 
-static void external_service_char_cb(GSList *chars, guint8 status,
-							gpointer user_data)
+static void external_service_char_cb(uint8_t status, GSList *chars,
+								void *user_data)
 {
 	struct hog_device *hogdev = user_data;
 	struct gatt_primary *prim = hogdev->hog_primary;
@@ -335,7 +298,7 @@ static void external_report_reference_cb(guint8 status, const guint8 *pdu,
 		return;
 	}
 
-	uuid16 = att_get_u16(&pdu[1]);
+	uuid16 = get_le16(&pdu[1]);
 	DBG("External report reference read, external report characteristic "
 						"UUID: 0x%04x", uuid16);
 	bt_uuid16_create(&uuid, uuid16);
@@ -343,15 +306,150 @@ static void external_report_reference_cb(guint8 status, const guint8 *pdu,
 					external_service_char_cb, hogdev);
 }
 
+static int report_cmp(gconstpointer a, gconstpointer b)
+{
+	const struct report *ra = a, *rb = b;
+
+	/* sort by type first.. */
+	if (ra->type != rb->type)
+		return ra->type - rb->type;
+
+	/* ..then by id */
+	return ra->id - rb->id;
+}
+
+static void output_written_cb(guint8 status, const guint8 *pdu,
+					guint16 plen, gpointer user_data)
+{
+	if (status != 0) {
+		error("Write output report failed: %s", att_ecode2str(status));
+		return;
+	}
+}
+
+static void forward_report(struct uhid_event *ev, void *user_data)
+{
+	struct hog_device *hogdev = user_data;
+	struct report *report, cmp;
+	GSList *l;
+	uint8_t *data;
+	int size;
+
+	switch (ev->u.output.rtype) {
+	case UHID_FEATURE_REPORT:
+		cmp.type = HOG_REPORT_TYPE_FEATURE;
+		break;
+	case UHID_OUTPUT_REPORT:
+		cmp.type = HOG_REPORT_TYPE_OUTPUT;
+		break;
+	case UHID_INPUT_REPORT:
+		cmp.type = HOG_REPORT_TYPE_INPUT;
+		break;
+	default:
+		return;
+	}
+
+	cmp.id = 0;
+	data = ev->u.output.data;
+	size = ev->u.output.size;
+	if (hogdev->has_report_id && size > 0) {
+		cmp.id = *data++;
+		--size;
+	}
+
+	l = g_slist_find_custom(hogdev->reports, &cmp, report_cmp);
+	if (!l)
+		return;
+
+	report = l->data;
+
+	DBG("Sending report type %d ID %d to device 0x%04X handle 0x%X",
+		cmp.type, cmp.id, hogdev->id, report->decl->value_handle);
+
+	if (hogdev->attrib == NULL)
+		return;
+
+	if (report->decl->properties & GATT_CHR_PROP_WRITE)
+		gatt_write_char(hogdev->attrib, report->decl->value_handle,
+				data, size, output_written_cb, hogdev);
+	else if (report->decl->properties & GATT_CHR_PROP_WRITE_WITHOUT_RESP)
+		gatt_write_cmd(hogdev->attrib, report->decl->value_handle,
+						data, size, NULL, NULL);
+}
+
+static bool get_descriptor_item_info(uint8_t *buf, ssize_t blen, ssize_t *len,
+								bool *is_long)
+{
+	if (!blen)
+		return false;
+
+	*is_long = (buf[0] == 0xfe);
+
+	if (*is_long) {
+		if (blen < 3)
+			return false;
+
+		/*
+		 * long item:
+		 * byte 0 -> 0xFE
+		 * byte 1 -> data size
+		 * byte 2 -> tag
+		 * + data
+		 */
+
+		*len = buf[1] + 3;
+	} else {
+		uint8_t b_size;
+
+		/*
+		 * short item:
+		 * byte 0[1..0] -> data size (=0, 1, 2, 4)
+		 * byte 0[3..2] -> type
+		 * byte 0[7..4] -> tag
+		 * + data
+		 */
+
+		b_size = buf[0] & 0x03;
+		*len = (b_size ? 1 << (b_size - 1) : 0) + 1;
+	}
+
+	/* item length should be no more than input buffer length */
+	return *len <= blen;
+}
+
+static char *item2string(char *str, uint8_t *buf, uint8_t len)
+{
+	char *p = str;
+	int i;
+
+	/*
+	 * Since long item tags are not defined except for vendor ones, we
+	 * just ensure that short items are printed properly (up to 5 bytes).
+	 */
+	for (i = 0; i < 6 && i < len; i++)
+		p += sprintf(p, " %02x", buf[i]);
+
+	/*
+	 * If there are some data left, just add continuation mark to indicate
+	 * this.
+	 */
+	if (i < len)
+		sprintf(p, " ...");
+
+	return str;
+}
+
 static void report_map_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 							gpointer user_data)
 {
 	struct hog_device *hogdev = user_data;
+	struct btd_adapter *adapter = device_get_adapter(hogdev->device);
 	uint8_t value[HOG_REPORT_MAP_MAX_SIZE];
 	struct uhid_event ev;
 	uint16_t vendor_src, vendor, product, version;
 	ssize_t vlen;
-	int i;
+	char itemstr[20]; /* 5x3 (data) + 4 (continuation) + 1 (null) */
+	int i, err;
 
 	if (status != 0) {
 		error("Report Map read failed: %s", att_ecode2str(status));
@@ -365,19 +463,25 @@ static void report_map_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 	}
 
 	DBG("Report MAP:");
-	for (i = 0; i < vlen; i++) {
-		switch (value[i]) {
-		case 0x85:
-		case 0x86:
-		case 0x87:
-			hogdev->has_report_id = TRUE;
-		}
+	for (i = 0; i < vlen;) {
+		ssize_t ilen = 0;
+		bool long_item = false;
 
-		if (i % 2 == 0) {
-			if (i + 1 == vlen)
-				DBG("\t %02x", value[i]);
-			else
-				DBG("\t %02x %02x", value[i], value[i + 1]);
+		if (get_descriptor_item_info(&value[i], vlen - i, &ilen,
+								&long_item)) {
+			/* Report ID is short item with prefix 100001xx */
+			if (!long_item && (value[i] & 0xfc) == 0x84)
+				hogdev->has_report_id = TRUE;
+
+			DBG("\t%s", item2string(itemstr, &value[i], ilen));
+
+			i += ilen;
+		} else {
+			error("Report Map parsing failed at %d", i);
+
+			/* Just print remaining items at once and break */
+			DBG("\t%s", item2string(itemstr, &value[i], vlen - i));
+			break;
 		}
 	}
 
@@ -391,7 +495,13 @@ static void report_map_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 	/* create uHID device */
 	memset(&ev, 0, sizeof(ev));
 	ev.type = UHID_CREATE;
-	strcpy((char *) ev.u.create.name, "bluez-hog-device");
+	if (device_name_known(hogdev->device))
+		device_get_name(hogdev->device, (char *) ev.u.create.name,
+						sizeof(ev.u.create.name));
+	else
+		strcpy((char *) ev.u.create.name, "bluez-hog-device");
+	ba2str(btd_adapter_get_address(adapter), (char *) ev.u.create.phys);
+	ba2str(device_get_address(hogdev->device), (char *) ev.u.create.uniq);
 	ev.u.create.vendor = vendor;
 	ev.u.create.product = product;
 	ev.u.create.version = version;
@@ -400,8 +510,13 @@ static void report_map_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 	ev.u.create.rd_data = value;
 	ev.u.create.rd_size = vlen;
 
-	if (write(hogdev->uhid_fd, &ev, sizeof(ev)) < 0)
-		error("Failed to create uHID device: %s", strerror(errno));
+	err = bt_uhid_send(hogdev->uhid, &ev);
+	if (err < 0) {
+		error("bt_uhid_send: %s", strerror(-err));
+		return;
+	}
+
+	bt_uhid_register(hogdev->uhid, UHID_OUTPUT, forward_report, hogdev);
 }
 
 static void info_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
@@ -423,7 +538,7 @@ static void info_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 		return;
 	}
 
-	hogdev->bcdhid = att_get_u16(&value[0]);
+	hogdev->bcdhid = get_le16(&value[0]);
 	hogdev->bcountrycode = value[2];
 	hogdev->flags = value[3];
 
@@ -463,7 +578,7 @@ static void proto_mode_read_cb(guint8 status, const guint8 *pdu, guint16 plen,
 								hogdev->id);
 }
 
-static void char_discovered_cb(GSList *chars, guint8 status, gpointer user_data)
+static void char_discovered_cb(uint8_t status, GSList *chars, void *user_data)
 {
 	struct hog_device *hogdev = user_data;
 	struct gatt_primary *prim = hogdev->hog_primary;
@@ -529,148 +644,6 @@ static void char_discovered_cb(GSList *chars, guint8 status, gpointer user_data)
 	if (info_handle)
 		gatt_read_char(hogdev->attrib, info_handle, info_read_cb,
 									hogdev);
-}
-
-static void output_written_cb(guint8 status, const guint8 *pdu,
-					guint16 plen, gpointer user_data)
-{
-	if (status != 0) {
-		error("Write output report failed: %s", att_ecode2str(status));
-		return;
-	}
-}
-
-static int report_type_cmp(gconstpointer a, gconstpointer b)
-{
-	const struct report *report = a;
-	uint8_t type = GPOINTER_TO_UINT(b);
-
-	return report->type - type;
-}
-
-static void forward_report(struct hog_device *hogdev,
-						struct uhid_event *ev)
-{
-	struct report *report;
-	GSList *l;
-	void *data;
-	int size;
-	guint type;
-
-	if (hogdev->has_report_id) {
-		data = ev->u.output.data + 1;
-		size = ev->u.output.size - 1;
-	} else {
-		data = ev->u.output.data;
-		size = ev->u.output.size;
-	}
-
-	switch (ev->type) {
-	case UHID_OUTPUT:
-		type = HOG_REPORT_TYPE_OUTPUT;
-		break;
-	case UHID_FEATURE:
-		type = HOG_REPORT_TYPE_FEATURE;
-		break;
-	default:
-		return;
-	}
-
-	l = g_slist_find_custom(hogdev->reports, GUINT_TO_POINTER(type),
-							report_type_cmp);
-	if (!l)
-		return;
-
-	report = l->data;
-
-	DBG("Sending report type %d to device 0x%04X handle 0x%X", type,
-				hogdev->id, report->decl->value_handle);
-
-	if (hogdev->attrib == NULL)
-		return;
-
-	if (report->decl->properties & ATT_CHAR_PROPER_WRITE)
-		gatt_write_char(hogdev->attrib, report->decl->value_handle,
-				data, size, output_written_cb, hogdev);
-	else if (report->decl->properties & ATT_CHAR_PROPER_WRITE_WITHOUT_RESP)
-		gatt_write_cmd(hogdev->attrib, report->decl->value_handle,
-						data, size, NULL, NULL);
-}
-
-static gboolean uhid_event_cb(GIOChannel *io, GIOCondition cond,
-							gpointer user_data)
-{
-	struct hog_device *hogdev = user_data;
-	struct uhid_event ev;
-	ssize_t bread;
-	int fd;
-
-	if (cond & (G_IO_ERR | G_IO_NVAL))
-		goto failed;
-
-	fd = g_io_channel_unix_get_fd(io);
-	memset(&ev, 0, sizeof(ev));
-
-	bread = read(fd, &ev, sizeof(ev));
-	if (bread < 0) {
-		int err = -errno;
-		DBG("uhid-dev read: %s(%d)", strerror(-err), -err);
-		goto failed;
-	}
-
-	DBG("uHID event type %d received", ev.type);
-
-	switch (ev.type) {
-	case UHID_START:
-	case UHID_STOP:
-		/* These are called to start and stop the underlying hardware.
-		 * For HoG we open the channels before creating the device so
-		 * the hardware is always ready. No need to handle these.
-		 * Note that these are also called when the kernel switches
-		 * between device-drivers loaded on the HID device. But we can
-		 * simply keep the hardware alive during transitions and it
-		 * works just fine.
-		 * The kernel never destroys a device itself! Only an explicit
-		 * UHID_DESTROY request can remove a device. */
-		break;
-	case UHID_OPEN:
-	case UHID_CLOSE:
-		/* OPEN/CLOSE are sent whenever user-space opens any interface
-		 * provided by the kernel HID device. Whenever the open-count
-		 * is non-zero we must be ready for I/O. As long as it is zero,
-		 * we can decide to drop all I/O and put the device
-		 * asleep This is optional, though. Moreover, some
-		 * special device drivers are buggy in that regard, so
-		 * maybe we just keep I/O always awake like HIDP in the
-		 * kernel does. */
-		break;
-	case UHID_OUTPUT:
-	case UHID_FEATURE:
-		forward_report(hogdev, &ev);
-		break;
-	case UHID_OUTPUT_EV:
-		/* This is only sent by kernels prior to linux-3.11. It
-		 * requires us to parse HID-descriptors in user-space to
-		 * properly handle it. This is redundant as the kernel
-		 * does it already. That's why newer kernels assemble
-		 * the output-reports and send it to us via UHID_OUTPUT.
-		 * We never implemented this, so we rely on users to use
-		 * recent-enough kernels if they want this feature. No reason
-		 * to implement this for older kernels. */
-		DBG("Unsupported uHID output event: type %d code %d value %d",
-			ev.u.output_ev.type, ev.u.output_ev.code,
-			ev.u.output_ev.value);
-		break;
-	default:
-		warn("unexpected uHID event");
-		break;
-	}
-
-	return TRUE;
-
-failed:
-	hogdev->uhid_watch_id = 0;
-	return FALSE;
 }
 
 static void attio_connected_cb(GAttrib *attrib, gpointer user_data)
@@ -757,26 +730,17 @@ static struct hog_device *hog_register_device(struct btd_device *device,
 						struct gatt_primary *prim)
 {
 	struct hog_device *hogdev;
-	GIOCondition cond = G_IO_IN | G_IO_ERR | G_IO_NVAL;
-	GIOChannel *io;
 
 	hogdev = hog_new_device(device, prim->range.start);
 	if (!hogdev)
 		return NULL;
 
-	hogdev->uhid_fd = open(UHID_DEVICE_FILE, O_RDWR | O_CLOEXEC);
-	if (hogdev->uhid_fd < 0) {
-		error("Failed to open uHID device: %s(%d)", strerror(errno),
-									errno);
+	hogdev->uhid = bt_uhid_new_default();
+	if (!hogdev->uhid) {
+		error("bt_uhid_new_default: failed");
 		hog_free_device(hogdev);
 		return NULL;
 	}
-
-	io = g_io_channel_unix_new(hogdev->uhid_fd);
-	g_io_channel_set_encoding(io, NULL, NULL);
-	hogdev->uhid_watch_id = g_io_add_watch(io, cond, uhid_event_cb,
-								hogdev);
-	g_io_channel_unref(io);
 
 	hogdev->hog_primary = g_memdup(prim, sizeof(*prim));
 
@@ -790,23 +754,8 @@ static struct hog_device *hog_register_device(struct btd_device *device,
 
 static int hog_unregister_device(struct hog_device *hogdev)
 {
-	struct uhid_event ev;
-
 	btd_device_remove_attio_callback(hogdev->device, hogdev->attioid);
-
-	if (hogdev->uhid_watch_id) {
-		g_source_remove(hogdev->uhid_watch_id);
-		hogdev->uhid_watch_id = 0;
-	}
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = UHID_DESTROY;
-	if (write(hogdev->uhid_fd, &ev, sizeof(ev)) < 0)
-		error("Failed to destroy uHID device: %s", strerror(errno));
-
-	close(hogdev->uhid_fd);
-	hogdev->uhid_fd = -1;
-
+	bt_uhid_unref(hogdev->uhid);
 	hog_free_device(hogdev);
 
 	return 0;

@@ -37,6 +37,7 @@ __BEGIN_DECLS
 /* Bluetooth profile interface IDs */
 
 #define BT_PROFILE_HANDSFREE_ID "handsfree"
+#define BT_PROFILE_HANDSFREE_CLIENT_ID "handsfree_client"
 #define BT_PROFILE_ADVANCED_AUDIO_ID "a2dp"
 #define BT_PROFILE_HEALTH_ID "health"
 #define BT_PROFILE_SOCKETS_ID "socket"
@@ -451,6 +452,8 @@ typedef struct {
     /* opcode MUST be one of: LE_Receiver_Test, LE_Transmitter_Test, LE_Test_End */
     int (*le_test_mode)(uint16_t opcode, uint8_t *buf, uint8_t len);
 
+    /* enable or disable bluetooth HCI snoop log */
+    int (*config_hci_snoop_log)(uint8_t enable);
 } bt_interface_t;
 
 /** TODO: Need to add APIs for Service Discovery, Service authorization and

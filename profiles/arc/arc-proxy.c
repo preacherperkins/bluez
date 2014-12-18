@@ -11,23 +11,24 @@
 #include <unistd.h>
 
 #include "lib/uuid.h"
-#include "plugin.h"
+#include "src/plugin.h"
 #include "gdbus/gdbus.h"
-#include "dbus-common.h"
+#include "src/dbus-common.h"
 #include "attrib/att.h"
-#include "adapter.h"
-#include "device.h"
+#include "src/adapter.h"
+#include "src/device.h"
 #include "attrib/att-database.h"
-#include "log.h"
+#include "src/log.h"
 #include "attrib/gatt-service.h"
 #include "attrib/gattrib.h"
-#include "attrib-server.h"
+#include "src/attrib-server.h"
 #include "attrib/gatt.h"
-#include "profile.h"
-#include "error.h"
-#include "textfile.h"
-#include "attio.h"
-#include "service.h"
+#include "src/profile.h"
+#include "src/error.h"
+#include "src/textfile.h"
+#include "src/attio.h"
+#include "src/service.h"
+#include "src/shared/util.h"
 
 #include "arc.h"
 
@@ -380,8 +381,8 @@ on_discover_desc (guint8 status, const guint8 *pdu, guint16 len,
 		uint16_t	 handle, uuid;
 
 		val    = dlst->data[i];
-		handle = att_get_u16 (val);
-		uuid   = att_get_u16 (val + 2);
+		handle = get_le16 (val);
+		uuid   = get_le16 (val + 2);
 
 		/* process_desc_ccc (chrx, uuid, handle); */
 	}
@@ -404,9 +405,9 @@ desc_char_disco (ARCProxy *aproxy, struct gatt_char *chr,
 	chrx->aproxy = aproxy;
 	memcpy(chrx->uuid, chr->uuid, sizeof(chr->uuid));
 
-	gatt_discover_char_desc (
+	gatt_discover_desc (
 		aproxy->attrib,
-		start, end,
+		start, end, NULL,
 		(GAttribResultFunc)on_discover_desc,
 		chrx);
 

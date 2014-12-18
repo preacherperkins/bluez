@@ -1,12 +1,16 @@
 #!/usr/bin/python
 
 from __future__ import print_function
+
 import os
 import sys
 import dbus
 import dbus.service
 import dbus.mainloop.glib
-import gobject
+try:
+  from gi.repository import GObject
+except ImportError:
+  import gobject as GObject
 import bluezutils
 
 class Player(dbus.service.Object):
@@ -30,9 +34,9 @@ class Player(dbus.service.Object):
 		else:
 			track = dbus.Dictionary({
 					"xesam:title" : "Title",
-					"xesam:artist" : "Artist",
+					"xesam:artist" : ["Artist"],
 					"xesam:album" : "Album",
-					"xesam:genre" : "Genre",
+					"xesam:genre" : ["Genre"],
 					"xesam:trackNumber" : dbus.Int32(1),
 					"mpris:length" : dbus.Int64(10000) },
 					signature="sv")
@@ -44,7 +48,7 @@ class Player(dbus.service.Object):
 					"Shuffle" : dbus.Boolean(False),
 					"Metadata" : track,
 					"Volume" : dbus.Double(1.0),
-					"Position" : dbus.UInt32(0),
+					"Position" : dbus.Int64(0),
 					"MinimumRate" : dbus.Double(1.0),
 					"MaximumRate" : dbus.Double(1.0),
 					"CanGoNext" : dbus.Boolean(False),
@@ -56,7 +60,7 @@ class Player(dbus.service.Object):
 					signature="sv")
 
 			handler = InputHandler(self)
-			gobject.io_add_watch(sys.stdin, gobject.IO_IN,
+			GObject.io_add_watch(sys.stdin, GObject.IO_IN,
 							handler.handle)
 
 	@dbus.service.method("org.freedesktop.DBus.Properties",
@@ -136,7 +140,7 @@ if __name__ == '__main__':
 
 	path = "/test/player"
 	player = Player(bus, path)
-	mainloop = gobject.MainLoop()
+	mainloop = GObject.MainLoop()
 
 	if len(sys.argv) > 2:
 		player.set_object(sys.argv[2])

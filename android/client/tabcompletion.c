@@ -30,7 +30,7 @@ typedef struct split_arg {
 } split_arg_t;
 
 /* function returns method of given name or NULL if not found */
-static const struct method *get_interface_method(const char *iname,
+const struct method *get_interface_method(const char *iname,
 							const char *mname)
 {
 	const struct interface *iface = get_interface(iname);
@@ -58,9 +58,9 @@ static void print_matches(enum_func f, void *user, const char *prefix, int len)
 
 /*
  * This function splits command line into linked list of arguments.
- * line_buffer - pointer to input comman line
+ * line_buffer - pointer to input command line
  * size - size of command line to parse
- * buf - output buffer to keep splited arguments list
+ * buf - output buffer to keep split arguments list
  * buf_size_in_bytes - size of buf
  */
 static int split_command(const char *line_buffer, int size, split_arg_t *buf,
@@ -113,12 +113,10 @@ struct command_completion_args {
 	enum_func func; /* enumerating function */
 	void *user; /* argument to enumerating function */
 	short_help help; /* help function */
-	void *user_help; /* additional data (used by short_help) */
+	const char *user_help; /* additional data (used by short_help) */
 };
 
-/*
- * complete command line
- */
+/* complete command line */
 static void tab_completion(struct command_completion_args *args)
 {
 	const char *name = args->typed;
@@ -134,16 +132,15 @@ static void tab_completion(struct command_completion_args *args)
 		/* prefix does not match */
 		if (strncmp(enum_name, name, len) != 0)
 			continue;
+
 		/* prefix matches first time */
 		if (count++ == 0) {
 			strcpy(prefix, enum_name);
 			prefix_len = strlen(prefix);
 			continue;
 		}
-		/*
-		 * Prefix matches next time
-		 * reduce prefix to common part
-		 */
+
+		/* Prefix matches next time reduce prefix to common part */
 		for (j = 0; prefix[j] != 0
 			&& prefix[j] == enum_name[j];)
 			++j;
@@ -158,12 +155,13 @@ static void tab_completion(struct command_completion_args *args)
 		tab_hit_count = 0;
 		return;
 	}
+
 	/* len == prefix_len => nothing new was added */
 	if (len == prefix_len) {
 		if (count != 1) {
-			if (tab_hit_count == 1)
+			if (tab_hit_count == 1) {
 				putchar('\a');
-			else if (tab_hit_count == 2 ||
+			} else if (tab_hit_count == 2 ||
 					args->help == NULL) {
 				print_matches(args->func,
 						args->user, name, len);
@@ -182,6 +180,7 @@ static void tab_completion(struct command_completion_args *args)
 			prefix[prefix_len++] = ' ';
 			prefix[prefix_len] = '\0';
 		}
+
 		terminal_insert_into_command_line(prefix + len);
 		tab_hit_count = 0;
 	}
@@ -285,10 +284,9 @@ static void method_help(struct command_completion_args *args)
 
 	if (eb != NULL)
 		haltest_info("%s %-*s%.*s%s%.*s%s%s\n", args->arg->ntcopy,
-				arg1_size, arg1,
-				sb - (const char *) args->user_help,
-				args->user_help,
-				bold, eb - sb, sb, normal, eb);
+				arg1_size, arg1, (int) (sb - args->user_help),
+				args->user_help, bold, (int) (eb - sb),
+				sb, normal, eb);
 	else
 		haltest_info("%s %-*s%s\n", args->arg->ntcopy,
 			arg1_size, arg1, args->user_help);
@@ -304,7 +302,7 @@ static const char *return_null(void *user, int i)
  * parameter completion function
  * argc - number of elements in arg list
  * arg - list of arguments
- * megthod - method to get completion from (can be NULL)
+ * method - method to get completion from (can be NULL)
  */
 static void param_completion(int argc, const split_arg_t *arg,
 					const struct method *method, int hlpix)
@@ -332,16 +330,16 @@ static void param_completion(int argc, const split_arg_t *arg,
 	if (args.func != NULL) {
 		args.typed = argv[argc - 1];
 		args.help = method_help;
-		args.user_help = (void *) method->help;
+		args.user_help = method ? method->help : NULL;
 
 		tab_completion(&args);
 	}
 }
 
 /*
- * This methd gets called when user tapped tab key.
- * line - points to comman line
- * len - size of line that should be used for comletions. This should be
+ * This method gets called when user tapped tab key.
+ * line - points to command line
+ * len - size of line that should be used for completions. This should be
  *   cursor position during tab hit.
  */
 void process_tab(const char *line, int len)
@@ -360,6 +358,7 @@ void process_tab(const char *line, int len)
 		command_completion(buf);
 		return;
 	}
+
 	method = get_command(buf[0].ntcopy);
 	if (method != NULL) {
 		param_completion(argc, buf, method, 1);

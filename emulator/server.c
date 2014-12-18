@@ -2,22 +2,22 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2011-2012  Intel Corporation
+ *  Copyright (C) 2011-2014  Intel Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
  *
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
  *
- *  This program is distributed in the hope that it will be useful,
+ *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
@@ -84,13 +84,19 @@ static void client_destroy(void *user_data)
 	free(client);
 }
 
-static void client_write_callback(const void *data, uint16_t len,
+static void client_write_callback(const struct iovec *iov, int iovlen,
 							void *user_data)
 {
 	struct client *client = user_data;
+	struct msghdr msg;
 	ssize_t written;
 
-	written = send(client->fd, data, len, MSG_DONTWAIT);
+	memset(&msg, 0, sizeof(msg));
+
+	msg.msg_iov = (struct iovec *) iov;
+	msg.msg_iovlen = iovlen;
+
+	written = sendmsg(client->fd, &msg, MSG_DONTWAIT);
 	if (written < 0)
 		return;
 }

@@ -31,6 +31,46 @@ static bool interface_ready(void)
 	return cbs != NULL;
 }
 
+static void handle_conn_state(void *buf, uint16_t len, int fd)
+{
+	struct hal_ev_pan_conn_state *ev = buf;
+
+	if (cbs->connection_state_cb)
+		cbs->connection_state_cb(ev->state, ev->status,
+					(bt_bdaddr_t *) ev->bdaddr,
+					ev->local_role, ev->remote_role);
+}
+
+static void handle_ctrl_state(void *buf, uint16_t len, int fd)
+{
+	struct hal_ev_pan_ctrl_state *ev = buf;
+
+	/*
+	 * FIXME: Callback declared in bt_pan.h is 'typedef void
+	 * (*btpan_control_state_callback)(btpan_control_state_t state,
+	 * bt_status_t error, int local_role, const char* ifname);
+	 * But PanService.Java defined it wrong way.
+	 * private void onControlStateChanged(int local_role, int state,
+	 * int error, String ifname).
+	 * First and third parameters are misplaced, so sending data according
+	 * to PanService.Java, fix this if issue fixed in PanService.Java.
+	 */
+	if (cbs->control_state_cb)
+		cbs->control_state_cb(ev->local_role, ev->state, ev->status,
+							(char *)ev->name);
+}
+
+/*
+ * handlers will be called from notification thread context,
+ * index in table equals to 'opcode - HAL_MINIMUM_EVENT'
+ */
+static const struct hal_ipc_handler ev_handlers[] = {
+	/* HAL_EV_PAN_CTRL_STATE */
+	{ handle_ctrl_state, false, sizeof(struct hal_ev_pan_ctrl_state) },
+	/* HAL_EV_PAN_CONN_STATE */
+	{ handle_conn_state, false, sizeof(struct hal_ev_pan_conn_state) },
+};
+
 static bt_status_t pan_enable(int local_role)
 {
 	struct hal_cmd_pan_enable cmd;
@@ -43,7 +83,7 @@ static bt_status_t pan_enable(int local_role)
 	cmd.local_role = local_role;
 
 	return hal_ipc_cmd(HAL_SERVICE_ID_PAN, HAL_OP_PAN_ENABLE,
-					sizeof(cmd), &cmd, 0, NULL, NULL);
+					sizeof(cmd), &cmd, NULL, NULL, NULL);
 }
 
 static int pan_get_local_role(void)
@@ -80,7 +120,7 @@ static bt_status_t pan_connect(const bt_bdaddr_t *bd_addr, int local_role,
 	cmd.remote_role = remote_role;
 
 	return hal_ipc_cmd(HAL_SERVICE_ID_PAN, HAL_OP_PAN_CONNECT,
-					sizeof(cmd), &cmd, 0, NULL, NULL);
+					sizeof(cmd), &cmd, NULL, NULL, NULL);
 }
 
 static bt_status_t pan_disconnect(const bt_bdaddr_t *bd_addr)
@@ -95,35 +135,55 @@ static bt_status_t pan_disconnect(const bt_bdaddr_t *bd_addr)
 	memcpy(cmd.bdaddr, bd_addr, sizeof(cmd.bdaddr));
 
 	return hal_ipc_cmd(HAL_SERVICE_ID_PAN, HAL_OP_PAN_DISCONNECT,
-					sizeof(cmd), &cmd, 0, NULL, NULL);
+					sizeof(cmd), &cmd, NULL, NULL, NULL);
 }
 
 static bt_status_t pan_init(const btpan_callbacks_t *callbacks)
 {
 	struct hal_cmd_register_module cmd;
+	int ret;
 
 	DBG("");
 
+	if (interface_ready())
+		return BT_STATUS_DONE;
+
 	cbs = callbacks;
 
-	cmd.service_id = HAL_SERVICE_ID_PAN;
+	hal_ipc_register(HAL_SERVICE_ID_PAN, ev_handlers,
+				sizeof(ev_handlers)/sizeof(ev_handlers[0]));
 
-	return hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
-					sizeof(cmd), &cmd, 0, NULL, NULL);
+	cmd.service_id = HAL_SERVICE_ID_PAN;
+	cmd.mode = HAL_MODE_DEFAULT;
+
+	ret = hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
+					sizeof(cmd), &cmd, NULL, NULL, NULL);
+
+	if (ret != BT_STATUS_SUCCESS) {
+		cbs = NULL;
+		hal_ipc_unregister(HAL_SERVICE_ID_PAN);
+	}
+
+	return ret;
 }
 
-static void pan_cleanup()
+static void pan_cleanup(void)
 {
+	struct hal_cmd_unregister_module cmd;
+
 	DBG("");
 
 	if (!interface_ready())
 		return;
 
-	/* TODO: disable service */
-
-	/* TODO: stop PAN thread */
-
 	cbs = NULL;
+
+	cmd.service_id = HAL_SERVICE_ID_PAN;
+
+	hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_UNREGISTER_MODULE,
+					sizeof(cmd), &cmd, NULL, NULL, NULL);
+
+	hal_ipc_unregister(HAL_SERVICE_ID_PAN);
 }
 
 static btpan_interface_t pan_if = {
@@ -136,7 +196,7 @@ static btpan_interface_t pan_if = {
 	.cleanup = pan_cleanup
 };
 
-btpan_interface_t *bt_get_pan_interface()
+btpan_interface_t *bt_get_pan_interface(void)
 {
 	return &pan_if;
 }

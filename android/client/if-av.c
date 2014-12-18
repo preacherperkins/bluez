@@ -16,6 +16,7 @@
  */
 
 #include "if-main.h"
+#include "../hal-utils.h"
 
 const btav_interface_t *if_av = NULL;
 
@@ -79,7 +80,7 @@ static void connect_p(int argc, const char **argv)
 {
 	bt_bdaddr_t addr;
 
-	RETURN_IF_NULL(if_hh);
+	RETURN_IF_NULL(if_av);
 	VERIFY_ADDR_ARG(2, &addr);
 
 	EXEC(if_av->connect, &addr);
@@ -100,7 +101,7 @@ static void disconnect_p(int argc, const char **argv)
 {
 	bt_bdaddr_t addr;
 
-	RETURN_IF_NULL(if_hh);
+	RETURN_IF_NULL(if_av);
 	VERIFY_ADDR_ARG(2, &addr);
 
 	EXEC(if_av->disconnect, &addr);

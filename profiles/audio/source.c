@@ -38,18 +38,18 @@
 #include <dbus/dbus.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
+#include "src/log.h"
 
 #include "src/adapter.h"
 #include "src/device.h"
 #include "src/service.h"
+#include "src/error.h"
+#include "src/dbus-common.h"
 
 #include "avdtp.h"
 #include "media.h"
 #include "a2dp.h"
-#include "error.h"
 #include "source.h"
-#include "dbus-common.h"
 
 struct source {
 	struct btd_service *service;
@@ -229,11 +229,14 @@ static void discovery_complete(struct avdtp *session, GSList *seps, struct avdtp
 	if (err) {
 		avdtp_unref(source->session);
 		source->session = NULL;
-		if (avdtp_error_category(err) == AVDTP_ERRNO
-				&& avdtp_error_posix_errno(err) != EHOSTDOWN) {
-			perr = -EAGAIN;
-		} else
-			perr = -EIO;
+
+		perr = -avdtp_error_posix_errno(err);
+		if (perr != -EHOSTDOWN) {
+			if (avdtp_error_category(err) == AVDTP_ERRNO)
+				perr = -EAGAIN;
+			else
+				perr = -EIO;
+		}
 		goto failed;
 	}
 
@@ -380,15 +383,12 @@ gboolean source_new_stream(struct btd_service *service, struct avdtp *session,
 	return TRUE;
 }
 
-int source_disconnect(struct btd_service *service, gboolean shutdown)
+int source_disconnect(struct btd_service *service)
 {
 	struct source *source = btd_service_get_user_data(service);
 
 	if (!source->session)
 		return -ENOTCONN;
-
-	if (shutdown)
-		avdtp_set_device_disconnect(source->session, TRUE);
 
 	/* cancel pending connect */
 	if (source->connect_id > 0) {

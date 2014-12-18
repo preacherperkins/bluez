@@ -1,18 +1,17 @@
 * NEWS
-  
+
 ** 2013.36
- 
+
    - Fix advertising by sending the correct byte-sequences to the
      HCI-device. The advertising data consists of the ARC-uuid, and there rest
      of the 31-byte advertising data is use for a (possibly truncated) version
      of the name (you can get the full name using the GATT-characterics)
    - Fix build on systems with pre-2.17 glibcs, by adding the -lrt in the
      right places.
-   - Added documentation -- README.org 
-  
+   - Added documentation -- README.org
+
 
 # Local Variables:
 # mode: org
 # End:
 #+STARTUP: showeverything
-  

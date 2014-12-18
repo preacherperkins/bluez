@@ -29,15 +29,16 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <bluetooth/bluetooth.h>
 #include <glib.h>
 
-#include "plugin.h"
-#include "adapter.h"
-#include "device.h"
-#include "log.h"
-#include "storage.h"
+#include "src/plugin.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/log.h"
+#include "src/storage.h"
 
 /*
  * Plugin to handle automatic pairing of devices with reduced user
@@ -121,6 +122,14 @@ static ssize_t autopair_pincb(struct btd_adapter *adapter,
 		}
 
 		break;
+	case 0x06:		/* Imaging */
+		if (class & 0x80) {	/* Printer */
+			if (attempt > 1)
+				return 0;
+			memcpy(pinbuf, "0000", 4);
+			return 4;
+		}
+		break;
 	}
 
 	return 0;
@@ -149,19 +158,27 @@ static int autopair_init(void)
 {
 	/* Initialize the random seed from /dev/urandom */
 	unsigned int seed;
-	int fd;
+	int fd, err;
+	ssize_t n;
 
 	fd = open("/dev/urandom", O_RDONLY);
-	if (fd >= 0) {
-		ssize_t n;
+	if (fd < 0) {
+		err = -errno;
+		error("Failed to open /dev/urandom: %s (%d)", strerror(-err),
+									-err);
+		return err;
+	}
 
-		n = read(fd, &seed, sizeof(seed));
-		if (n < (ssize_t) sizeof(seed))
-			seed = time(NULL);
-
+	n = read(fd, &seed, sizeof(seed));
+	if (n < (ssize_t) sizeof(seed)) {
+		err = (n == -1) ? -errno : -EIO;
+		error("Failed to read %zu bytes from /dev/urandom",
+								sizeof(seed));
 		close(fd);
-	} else
-		seed = time(NULL);
+		return err;
+	}
+
+	close(fd);
 
 	srand(seed);
 

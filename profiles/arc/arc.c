@@ -19,23 +19,23 @@
 #include <dirent.h>
 
 #include "lib/uuid.h"
-#include "plugin.h"
+#include "src/plugin.h"
 #include "gdbus/gdbus.h"
-#include "dbus-common.h"
+#include "src/dbus-common.h"
 #include "attrib/att.h"
-#include "adapter.h"
-#include "device.h"
+#include "src/adapter.h"
+#include "src/device.h"
 #include "attrib/att-database.h"
-#include "log.h"
+#include "src/log.h"
 #include "attrib/gatt-service.h"
 #include "attrib/gattrib.h"
-#include "attrib-server.h"
+#include "src/attrib-server.h"
 #include "attrib/gatt.h"
-#include "profile.h"
-#include "error.h"
-#include "textfile.h"
-#include "attio.h"
-#include "service.h"
+#include "src/profile.h"
+#include "src/error.h"
+#include "src/textfile.h"
+#include "src/attio.h"
+#include "src/service.h"
 
 #include "lib/uuid.h"
 #include "lib/mgmt.h"
@@ -152,9 +152,9 @@ arc_char_table_add_char (GHashTable *table,
 
 	achar->gatt_props = 0;
 	if (achar->flags & ARC_CHAR_FLAG_READABLE)
-		achar->gatt_props |= ATT_CHAR_PROPER_READ;
+		achar->gatt_props |= GATT_CHR_PROP_READ;
 	if (achar->flags & ARC_CHAR_FLAG_WRITABLE)
-		achar->gatt_props |= ATT_CHAR_PROPER_WRITE;
+		achar->gatt_props |= GATT_CHR_PROP_WRITE;
 
 	g_hash_table_insert (table, achar->uuidstr, achar);
 
@@ -168,7 +168,7 @@ arc_char_table_find_by_uuid (GHashTable *table, const char *uuid)
 	g_return_val_if_fail (table, NULL);
 	g_return_val_if_fail (uuid, NULL);
 
- 	return (ARCChar*)g_hash_table_lookup (table, uuid);
+	return (ARCChar*)g_hash_table_lookup (table, uuid);
 }
 
 

@@ -32,27 +32,27 @@
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
-#include "log.h"
-#include "plugin.h"
+#include "src/log.h"
+#include "src/plugin.h"
 
 #include "lib/uuid.h"
-#include "../src/adapter.h"
-#include "../src/device.h"
-#include "../src/profile.h"
-#include "../src/service.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/profile.h"
+#include "src/service.h"
 
 #include "device.h"
 #include "server.h"
 
 static int hid_server_probe(struct btd_profile *p, struct btd_adapter *adapter)
 {
-	return server_start(adapter_get_address(adapter));
+	return server_start(btd_adapter_get_address(adapter));
 }
 
 static void hid_server_remove(struct btd_profile *p,
 						struct btd_adapter *adapter)
 {
-	server_stop(adapter_get_address(adapter));
+	server_stop(btd_adapter_get_address(adapter));
 }
 
 static struct btd_profile input_profile = {
@@ -97,15 +97,24 @@ static int input_init(void)
 	config = load_config_file(CONFIGDIR "/input.conf");
 	if (config) {
 		int idle_timeout;
+		gboolean uhid_enabled;
 
 		idle_timeout = g_key_file_get_integer(config, "General",
-						"IdleTimeout", &err);
-		if (err) {
-			DBG("input.conf: %s", err->message);
-			g_error_free(err);
-		}
+							"IdleTimeout", &err);
+		if (!err) {
+			DBG("input.conf: IdleTimeout=%d", idle_timeout);
+			input_set_idle_timeout(idle_timeout * 60);
+		} else
+			g_clear_error(&err);
 
-		input_set_idle_timeout(idle_timeout * 60);
+		uhid_enabled = g_key_file_get_boolean(config, "General",
+							"UserspaceHID", &err);
+		if (!err) {
+			DBG("input.conf: UserspaceHID=%s", uhid_enabled ?
+							"true" : "false");
+			input_enable_userspace_hid(uhid_enabled);
+		} else
+			g_clear_error(&err);
 	}
 
 	btd_profile_register(&input_profile);

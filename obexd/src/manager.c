@@ -33,9 +33,9 @@
 #include <sys/socket.h>
 #include <inttypes.h>
 
-#include <btio/btio.h>
 #include <gobex/gobex.h>
 
+#include "btio/btio.h"
 #include "obexd.h"
 #include "obex.h"
 #include "obex-priv.h"
@@ -521,8 +521,7 @@ void manager_cleanup(void)
 
 	/* FIXME: Release agent? */
 
-	if (agent)
-		agent_free(agent);
+	agent_free(agent);
 
 	g_dbus_detach_object_manager(connection);
 

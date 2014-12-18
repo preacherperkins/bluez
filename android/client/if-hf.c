@@ -16,6 +16,7 @@
  */
 
 #include "if-main.h"
+#include "../hal-utils.h"
 
 const bthf_interface_t *if_hf = NULL;
 
@@ -575,7 +576,7 @@ static void at_response_c(int argc, const char **argv, enum_func *enum_func,
 static void at_response_p(int argc, const char **argv)
 {
 	bthf_at_response_t response_code;
-	int error_code = 0;
+	int error_code;
 
 	RETURN_IF_NULL(if_hf);
 
@@ -587,7 +588,9 @@ static void at_response_p(int argc, const char **argv)
 	response_code = str2bthf_at_response_t(argv[2]);
 
 	/* error code */
-	if (argc >= 3)
+	if (argc <= 3)
+		error_code = 0;
+	else
 		error_code = atoi(argv[3]);
 
 	EXEC(if_hf->at_response, response_code, error_code);

@@ -60,6 +60,8 @@ extern "C" {
 #define IMMEDIATE_ALERT_UUID	"00001802-0000-1000-8000-00805f9b34fb"
 #define LINK_LOSS_UUID		"00001803-0000-1000-8000-00805f9b34fb"
 #define TX_POWER_UUID		"00001804-0000-1000-8000-00805f9b34fb"
+#define BATTERY_UUID		"0000180f-0000-1000-8000-00805f9b34fb"
+#define SCAN_PARAMETERS_UUID	"00001813-0000-1000-8000-00805f9b34fb"
 
 #define SAP_UUID		"0000112D-0000-1000-8000-00805f9b34fb"
 
@@ -105,6 +107,38 @@ extern "C" {
 #define OBEX_MNS_UUID		"00001133-0000-1000-8000-00805f9b34fb"
 #define OBEX_MAP_UUID		"00001134-0000-1000-8000-00805f9b34fb"
 
+/* GATT UUIDs section */
+#define GATT_PRIM_SVC_UUID				0x2800
+#define GATT_SND_SVC_UUID				0x2801
+#define GATT_INCLUDE_UUID				0x2802
+#define GATT_CHARAC_UUID				0x2803
+
+/* GATT Characteristic Types */
+#define GATT_CHARAC_DEVICE_NAME				0x2A00
+#define GATT_CHARAC_APPEARANCE				0x2A01
+#define GATT_CHARAC_PERIPHERAL_PRIV_FLAG		0x2A02
+#define GATT_CHARAC_RECONNECTION_ADDRESS		0x2A03
+#define GATT_CHARAC_PERIPHERAL_PREF_CONN		0x2A04
+#define GATT_CHARAC_SERVICE_CHANGED			0x2A05
+#define GATT_CHARAC_SYSTEM_ID				0x2A23
+#define GATT_CHARAC_MODEL_NUMBER_STRING			0x2A24
+#define GATT_CHARAC_SERIAL_NUMBER_STRING		0x2A25
+#define GATT_CHARAC_FIRMWARE_REVISION_STRING		0x2A26
+#define GATT_CHARAC_HARDWARE_REVISION_STRING		0x2A27
+#define GATT_CHARAC_SOFTWARE_REVISION_STRING		0x2A28
+#define GATT_CHARAC_MANUFACTURER_NAME_STRING		0x2A29
+
+/* GATT Characteristic Descriptors */
+#define GATT_CHARAC_EXT_PROPER_UUID			0x2900
+#define GATT_CHARAC_USER_DESC_UUID			0x2901
+#define GATT_CLIENT_CHARAC_CFG_UUID			0x2902
+#define GATT_SERVER_CHARAC_CFG_UUID			0x2903
+#define GATT_CHARAC_FMT_UUID				0x2904
+#define GATT_CHARAC_AGREG_FMT_UUID			0x2905
+#define GATT_CHARAC_VALID_RANGE_UUID			0x2906
+#define GATT_EXTERNAL_REPORT_REFERENCE			0x2907
+#define GATT_REPORT_REFERENCE				0x2908
+
 typedef struct {
 	enum {
 		BT_UUID_UNSPEC = 0,
@@ -132,6 +166,11 @@ void bt_uuid_to_uuid128(const bt_uuid_t *src, bt_uuid_t *dst);
 
 int bt_uuid_to_string(const bt_uuid_t *uuid, char *str, size_t n);
 int bt_string_to_uuid(bt_uuid_t *uuid, const char *string);
+
+static inline int bt_uuid_len(const bt_uuid_t *uuid)
+{
+	return uuid->type / 8;
+}
 
 #ifdef __cplusplus
 }

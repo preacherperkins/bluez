@@ -22,12 +22,10 @@
 
 #include "history.h"
 
-/*
- * Very simple history storage for easy usage of tool
- */
+/* Very simple history storage for easy usage of tool */
 
-#define HISTORY_DEPTH 20
-#define LINE_SIZE 100
+#define HISTORY_DEPTH 40
+#define LINE_SIZE 200
 static char lines[HISTORY_DEPTH][LINE_SIZE];
 static int last_line = 0;
 static int history_size = 0;
@@ -49,13 +47,16 @@ void history_restore(const char *filename)
 	for (;;) {
 		if (fgets(line, 1000, f) != NULL) {
 			int l = strlen(line);
+
 			while (l > 0 && isspace(line[--l]))
 				line[l] = 0;
+
 			if (l > 0)
 				history_add_line(line);
 		} else
 			break;
 	}
+
 	fclose(f);
 }
 

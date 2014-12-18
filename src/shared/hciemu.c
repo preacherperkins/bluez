@@ -2,7 +2,7 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2012  Intel Corporation. All rights reserved.
+ *  Copyright (C) 2012-2014  Intel Corporation. All rights reserved.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <sys/socket.h>
 
 #include <glib.h>
@@ -41,8 +42,9 @@
 #include "monitor/bt.h"
 #include "emulator/btdev.h"
 #include "emulator/bthost.h"
-
-#include "hciemu.h"
+#include "src/shared/util.h"
+#include "src/shared/queue.h"
+#include "src/shared/hciemu.h"
 
 struct hciemu {
 	int ref_count;
@@ -53,7 +55,7 @@ struct hciemu {
 	guint host_source;
 	guint master_source;
 	guint client_source;
-	GList *post_command_hooks;
+	struct queue *post_command_hooks;
 	char bdaddr_str[18];
 };
 
@@ -62,11 +64,27 @@ struct hciemu_command_hook {
 	void *user_data;
 };
 
-static void destroy_command_hook(gpointer data, gpointer user_data)
+static void destroy_command_hook(void *data)
 {
 	struct hciemu_command_hook *hook = data;
 
-	g_free(hook);
+	free(hook);
+}
+
+struct run_data {
+	uint16_t opcode;
+	const void *data;
+	uint8_t len;
+};
+
+static void run_command_hook(void *data, void *user_data)
+{
+	struct hciemu_command_hook *hook = data;
+	struct run_data *run_data = user_data;
+
+	if (hook->function)
+		hook->function(run_data->opcode, run_data->data,
+					run_data->len, hook->user_data);
 }
 
 static void master_command_callback(uint16_t opcode,
@@ -74,17 +92,12 @@ static void master_command_callback(uint16_t opcode,
 				btdev_callback callback, void *user_data)
 {
 	struct hciemu *hciemu = user_data;
-	GList *list;
+	struct run_data run_data = { .opcode = opcode,
+						.data = data, .len = len };
 
 	btdev_command_default(callback);
 
-	for (list = g_list_first(hciemu->post_command_hooks); list;
-						list = g_list_next(list)) {
-		struct hciemu_command_hook *hook = list->data;
-
-		if (hook->function)
-			hook->function(opcode, data, len, hook->user_data);
-	}
+	queue_foreach(hciemu->post_command_hooks, run_command_hook, &run_data);
 }
 
 static void client_command_callback(uint16_t opcode,
@@ -94,7 +107,8 @@ static void client_command_callback(uint16_t opcode,
 	btdev_command_default(callback);
 }
 
-static void write_callback(const void *data, uint16_t len, void *user_data)
+static void writev_callback(const struct iovec *iov, int iovlen,
+								void *user_data)
 {
 	GIOChannel *channel = user_data;
 	ssize_t written;
@@ -102,7 +116,7 @@ static void write_callback(const void *data, uint16_t len, void *user_data)
 
 	fd = g_io_channel_unix_get_fd(channel);
 
-	written = write(fd, data, len);
+	written = writev(fd, iov, iovlen);
 	if (written < 0)
 		return;
 }
@@ -140,7 +154,7 @@ static guint create_source_bthost(int fd, struct bthost *bthost)
 	g_io_channel_set_encoding(channel, NULL, NULL);
 	g_io_channel_set_buffered(channel, FALSE);
 
-	bthost_set_send_handler(bthost, write_callback, channel);
+	bthost_set_send_handler(bthost, writev_callback, channel);
 
 	source = g_io_add_watch_full(channel, G_PRIORITY_DEFAULT,
 				G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL,
@@ -190,7 +204,7 @@ static guint create_source_btdev(int fd, struct btdev *btdev)
 	g_io_channel_set_encoding(channel, NULL, NULL);
 	g_io_channel_set_buffered(channel, FALSE);
 
-	btdev_set_send_handler(btdev, write_callback, channel);
+	btdev_set_send_handler(btdev, writev_callback, channel);
 
 	source = g_io_add_watch_full(channel, G_PRIORITY_DEFAULT,
 				G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL,
@@ -216,6 +230,7 @@ static bool create_vhci(struct hciemu *hciemu)
 
 	fd = open("/dev/vhci", O_RDWR | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
+		perror("Opening /dev/vhci failed");
 		btdev_destroy(btdev);
 		return false;
 	}
@@ -291,7 +306,7 @@ struct hciemu *hciemu_new(enum hciemu_type type)
 {
 	struct hciemu *hciemu;
 
-	hciemu = g_try_new0(struct hciemu, 1);
+	hciemu = new0(struct hciemu, 1);
 	if (!hciemu)
 		return NULL;
 
@@ -309,15 +324,23 @@ struct hciemu *hciemu_new(enum hciemu_type type)
 		return NULL;
 	}
 
+	hciemu->post_command_hooks = queue_new();
+	if (!hciemu->post_command_hooks) {
+		free(hciemu);
+		return NULL;
+	}
+
 	if (!create_vhci(hciemu)) {
-		g_free(hciemu);
+		queue_destroy(hciemu->post_command_hooks, NULL);
+		free(hciemu);
 		return NULL;
 	}
 
 	if (!create_stack(hciemu)) {
 		g_source_remove(hciemu->master_source);
 		btdev_destroy(hciemu->master_dev);
-		g_free(hciemu);
+		queue_destroy(hciemu->post_command_hooks, NULL);
+		free(hciemu);
 		return NULL;
 	}
 
@@ -341,11 +364,10 @@ void hciemu_unref(struct hciemu *hciemu)
 	if (!hciemu)
 		return;
 
-	if (__sync_sub_and_fetch(&hciemu->ref_count, 1) > 0)
+	if (__sync_sub_and_fetch(&hciemu->ref_count, 1))
 		return;
 
-	g_list_foreach(hciemu->post_command_hooks, destroy_command_hook, NULL);
-	g_list_free(hciemu->post_command_hooks);
+	queue_destroy(hciemu->post_command_hooks, destroy_command_hook);
 
 	bthost_stop(hciemu->host_stack);
 
@@ -357,7 +379,7 @@ void hciemu_unref(struct hciemu *hciemu)
 	btdev_destroy(hciemu->client_dev);
 	btdev_destroy(hciemu->master_dev);
 
-	g_free(hciemu);
+	free(hciemu);
 }
 
 const char *hciemu_get_address(struct hciemu *hciemu)
@@ -405,15 +427,17 @@ bool hciemu_add_master_post_command_hook(struct hciemu *hciemu,
 	if (!hciemu)
 		return false;
 
-	hook = g_try_new0(struct hciemu_command_hook, 1);
+	hook = new0(struct hciemu_command_hook, 1);
 	if (!hook)
 		return false;
 
 	hook->function = function;
 	hook->user_data = user_data;
 
-	hciemu->post_command_hooks = g_list_append(hciemu->post_command_hooks,
-									hook);
+	if (!queue_push_tail(hciemu->post_command_hooks, hook)) {
+		free(hook);
+		return false;
+	}
 
 	return true;
 }

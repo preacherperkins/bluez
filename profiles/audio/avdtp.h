@@ -221,18 +221,7 @@ struct avdtp *avdtp_ref(struct avdtp *session);
 struct avdtp_service_capability *avdtp_service_cap_new(uint8_t category,
 							void *data, int size);
 
-struct avdtp_remote_sep *avdtp_get_remote_sep(struct avdtp *session,
-						uint8_t seid);
-
-uint8_t avdtp_get_seid(struct avdtp_remote_sep *sep);
-
-uint8_t avdtp_get_type(struct avdtp_remote_sep *sep);
-
 struct avdtp_service_capability *avdtp_get_codec(struct avdtp_remote_sep *sep);
-
-gboolean avdtp_get_delay_reporting(struct avdtp_remote_sep *sep);
-
-struct avdtp_stream *avdtp_get_stream(struct avdtp_remote_sep *sep);
 
 int avdtp_discover(struct avdtp *session, avdtp_discover_cb_t cb,
 			void *user_data);
@@ -251,8 +240,6 @@ gboolean avdtp_stream_get_transport(struct avdtp_stream *stream, int *sock,
 					GSList **caps);
 struct avdtp_service_capability *avdtp_stream_get_codec(
 						struct avdtp_stream *stream);
-gboolean avdtp_stream_has_capability(struct avdtp_stream *stream,
-				struct avdtp_service_capability *cap);
 gboolean avdtp_stream_has_capabilities(struct avdtp_stream *stream,
 					GSList *caps);
 struct avdtp_remote_sep *avdtp_stream_get_remote_sep(
@@ -306,8 +293,3 @@ int avdtp_error_posix_errno(struct avdtp_error *err);
 
 struct btd_adapter *avdtp_get_adapter(struct avdtp *session);
 struct btd_device *avdtp_get_device(struct avdtp *session);
-
-void avdtp_set_device_disconnect(struct avdtp *session, gboolean dev_dc);
-
-int avdtp_init(struct btd_adapter *adapter);
-void avdtp_exit(struct btd_adapter *adapter);

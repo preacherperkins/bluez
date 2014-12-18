@@ -40,6 +40,8 @@
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/sco.h>
 
+#include "src/shared/util.h"
+
 /* Test modes */
 enum {
 	SEND,
@@ -208,7 +210,7 @@ static void do_listen(void (*handler)(int sk))
 							strerror(errno), errno);
 			if (!defer_setup) {
 				close(nsk);
-				goto error;
+				exit(1);
 			}
 		}
 
@@ -225,7 +227,7 @@ static void do_listen(void (*handler)(int sk))
 
 			if (defer_setup < 0) {
 				close(nsk);
-				goto error;
+				exit(1);
 			}
 		}
 
@@ -234,8 +236,6 @@ static void do_listen(void (*handler)(int sk))
 		syslog(LOG_INFO, "Disconnect");
 		exit(0);
 	}
-
-	return;
 
 error:
 	close(sk);
@@ -255,7 +255,7 @@ static void dump_mode(int sk)
 							strerror(errno), errno);
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -283,7 +283,7 @@ static void recv_mode(int sk)
 							strerror(errno), errno);
 
 	if (defer_setup) {
-		len = read(sk, buf, sizeof(buf));
+		len = read(sk, buf, data_size);
 		if (len < 0)
 			syslog(LOG_ERR, "Initial read error: %s (%d)",
 						strerror(errno), errno);
@@ -345,8 +345,8 @@ static void send_mode(char *svr)
 
 	seq = 0;
 	while (1) {
-		bt_put_le32(seq, buf);
-		bt_put_le16(data_size, buf + 4);
+		put_le32(seq, buf);
+		put_le16(data_size, buf + 4);
 
 		seq++;
 

@@ -31,31 +31,31 @@
 #include <dbus/dbus.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
-#include "textfile.h"
+#include "src/log.h"
+#include "src/textfile.h"
 
 #include "lib/uuid.h"
 #include "lib/mgmt.h"
 #include "src/shared/mgmt.h"
 
-#include "hcid.h"
-#include "sdpd.h"
-#include "adapter.h"
-#include "device.h"
-#include "profile.h"
-#include "service.h"
-#include "dbus-common.h"
-#include "error.h"
-#include "glib-helper.h"
-#include "storage.h"
+#include "src/hcid.h"
+#include "src/sdpd.h"
+#include "src/adapter.h"
+#include "src/device.h"
+#include "src/profile.h"
+#include "src/service.h"
+#include "src/dbus-common.h"
+#include "src/error.h"
+#include "src/uuid-helper.h"
+#include "src/storage.h"
 #include "attrib/gattrib.h"
 #include "attrib/att.h"
 #include "attrib/gatt.h"
-#include "attrib-server.h"
+#include "src/attrib-server.h"
 #include "attrib/att-database.h"
 #include "attrib/gatt-service.h"
-#include "attio.h"
-#include "eir.h"
+#include "src/attio.h"
+#include "src/eir.h"
 
 #include "arc.h"
 
@@ -88,7 +88,7 @@ each_device_disconnect (struct btd_device *device, void *data)
 
 	self = (ARCServer*)data;
 
-	if (!device_is_connected (device))
+	if (!btd_device_is_connected (device))
 		return;
 
 	DBG ("arc: automatically disconnecting");
@@ -309,8 +309,8 @@ handle_blob (ARCServer *self, struct attribute *attr,
 		 * existing result */
 		/* DBG ("clearing old results"); */
 		/* if (!arc_attrib_db_clear (self, achar)) { */
-		/* 	error ("failed to update attrib"); */
-		/* 	return; */
+		/*	error ("failed to update attrib"); */
+		/*	return; */
 		/* } */
 
 		request = arc_char_get_value_string (achar);
@@ -672,7 +672,7 @@ submit_result_method (DBusConnection *conn, DBusMessage *msg, ARCServer *self)
 	result_achar = arc_char_table_find_by_uuid (self->char_table,
 						ARC_RESULT_UUID);
 	if (!result_achar)
- 		return btd_error_failed (msg, "could not find characteristic");
+		return btd_error_failed (msg, "could not find characteristic");
 
 	/* arc_attrib_db_clear (self, result_achar); */
 	arc_char_set_value_string (result_achar, results);

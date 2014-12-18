@@ -47,6 +47,8 @@
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
+#include "src/shared/util.h"
+
 /* Test modes */
 enum {
 	SEND,
@@ -435,8 +437,6 @@ static void do_listen(void (*handler)(int sk))
 		exit(0);
 	}
 
-	return;
-
 error:
 	close(sk);
 	exit(1);
@@ -466,8 +466,11 @@ static void save_mode(int sk)
 	while ((len = read(sk, b, data_size)) > 0) {
 		ret = write(save_fd, b, len);
 		if (ret < 0)
-			return;
+			goto done;
 	}
+
+done:
+	free(b);
 }
 
 static void recv_mode(int sk)
@@ -564,8 +567,8 @@ static void do_send(int sk)
 
 	seq = 0;
 	while ((num_frames == -1) || (num_frames-- > 0)) {
-		bt_put_le32(seq, buf);
-		bt_put_le16(data_size, buf + 4);
+		put_le32(seq, buf);
+		put_le16(data_size, buf + 4);
 
 		seq++;
 
@@ -627,8 +630,8 @@ static void automated_send_recv()
 
 	if (fork()) {
 		if (!savefile) {
+			/* do_listen() never returns */
 			do_listen(recv_mode);
-			return;
 		}
 
 		save_fd = open(savefile, O_CREAT | O_WRONLY,
@@ -636,9 +639,8 @@ static void automated_send_recv()
 		if (save_fd < 0)
 			syslog(LOG_ERR, "Failed to open file to save data");
 
+		/* do_listen() never returns */
 		do_listen(save_mode);
-
-		close(save_fd);
 	} else {
 		ba2str(&bdaddr, device);
 

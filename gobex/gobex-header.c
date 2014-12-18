@@ -146,6 +146,8 @@ GObexHeader *g_obex_header_decode(const void *data, gsize len,
 	GError *conv_err = NULL;
 
 	if (len < 2) {
+		if (!err)
+			return NULL;
 		g_set_error(err, G_OBEX_ERROR, G_OBEX_ERROR_PARSE_ERROR,
 						"Too short header in packet");
 		g_obex_debug(G_OBEX_DEBUG_ERROR, "%s", (*err)->message);
@@ -425,7 +427,7 @@ GObexHeader *g_obex_header_new_bytes(guint8 id, const void *data, gsize len)
 	return header;
 }
 
-GObexHeader *g_obex_header_new_apparam(GObexApparam *apparam)
+GObexHeader *g_obex_header_new_tag(guint8 id, GObexApparam *apparam)
 {
 	guint8 buf[1024];
 	gssize len;
@@ -434,7 +436,12 @@ GObexHeader *g_obex_header_new_apparam(GObexApparam *apparam)
 	if (len < 0)
 		return NULL;
 
-	return g_obex_header_new_bytes(G_OBEX_HDR_APPARAM, buf, len);
+	return g_obex_header_new_bytes(id, buf, len);
+}
+
+GObexHeader *g_obex_header_new_apparam(GObexApparam *apparam)
+{
+	return g_obex_header_new_tag(G_OBEX_HDR_APPARAM, apparam);
 }
 
 GObexHeader *g_obex_header_new_uint8(guint8 id, guint8 val)

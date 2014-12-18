@@ -792,7 +792,7 @@ static inline void ext_inquiry_data_dump(int level, struct frame *frm,
 				type == 0x02 ? "Shortened" : "Complete");
 
 		for (i = 0; i < len / 2; i++)
-			printf(" 0x%4.4x", bt_get_le16(data + i * 2));
+			printf(" 0x%4.4x", get_le16(data + i * 2));
 
 		printf("\n");
 		break;
@@ -2445,17 +2445,25 @@ static inline void read_local_version_dump(int level, struct frame *frm)
 		p_indent(level, frm);
 		printf("Error: %s\n", status2str(rp->status));
 	} else {
+		char *lmpver = lmp_vertostr(rp->lmp_ver);
+		char *hciver = hci_vertostr(rp->hci_ver);
+
 		p_indent(level, frm);
 		printf("HCI Version: %s (0x%x) HCI Revision: 0x%x\n",
-					hci_vertostr(rp->hci_ver),
+					hciver ? hciver : "n/a",
 					rp->hci_ver, btohs(rp->hci_rev));
 		p_indent(level, frm);
 		printf("LMP Version: %s (0x%x) LMP Subversion: 0x%x\n",
-					lmp_vertostr(rp->lmp_ver),
+					lmpver ? lmpver : "n/a",
 					rp->lmp_ver, btohs(rp->lmp_subver));
 		p_indent(level, frm);
 		printf("Manufacturer: %s (%d)\n",
 				bt_compidtostr(manufacturer), manufacturer);
+
+		if (lmpver)
+			free(lmpver);
+		if (hciver)
+			free(hciver);
 	}
 }
 
@@ -3178,13 +3186,18 @@ static inline void read_remote_version_complete_dump(int level, struct frame *fr
 		p_indent(level, frm);
 		printf("Error: %s\n", status2str(evt->status));
 	} else {
+		char *lmpver = lmp_vertostr(evt->lmp_ver);
+
 		p_indent(level, frm);
 		printf("LMP Version: %s (0x%x) LMP Subversion: 0x%x\n",
-			lmp_vertostr(evt->lmp_ver), evt->lmp_ver,
+			lmpver ? lmpver : "n/a", evt->lmp_ver,
 			btohs(evt->lmp_subver));
 		p_indent(level, frm);
 		printf("Manufacturer: %s (%d)\n",
 			bt_compidtostr(manufacturer), manufacturer);
+
+		if (lmpver)
+			free(lmpver);
 	}
 }
 

@@ -22,6 +22,11 @@
  *
  */
 
+#include "src/shared/crypto.h"
+
+/* Len of signature in write signed packet */
+#define ATT_SIGNATURE_LEN		12
+
 /* Attribute Protocol Opcodes */
 #define ATT_OP_ERROR			0x01
 #define ATT_OP_MTU_REQ			0x02
@@ -75,16 +80,6 @@
 #define ATT_ECODE_TIMEOUT			0x81
 #define ATT_ECODE_ABORTED			0x82
 
-/* Characteristic Property bit field */
-#define ATT_CHAR_PROPER_BROADCAST		0x01
-#define ATT_CHAR_PROPER_READ			0x02
-#define ATT_CHAR_PROPER_WRITE_WITHOUT_RESP	0x04
-#define ATT_CHAR_PROPER_WRITE			0x08
-#define ATT_CHAR_PROPER_NOTIFY			0x10
-#define ATT_CHAR_PROPER_INDICATE		0x20
-#define ATT_CHAR_PROPER_AUTH			0x40
-#define ATT_CHAR_PROPER_EXT_PROPER		0x80
-
 #define ATT_MAX_VALUE_LEN			512
 #define ATT_DEFAULT_L2CAP_MTU			48
 #define ATT_DEFAULT_LE_MTU			23
@@ -93,8 +88,8 @@
 #define ATT_PSM					31
 
 /* Flags for Execute Write Request Operation */
-#define ATT_CANCEL_ALL_PREP_WRITES              0x00
-#define ATT_WRITE_ALL_PREP_WRITES               0x01
+#define ATT_CANCEL_ALL_PREP_WRITES		0x00
+#define ATT_WRITE_ALL_PREP_WRITES		0x01
 
 /* Find Information Response Formats */
 #define ATT_FIND_INFO_RESP_FMT_16BIT		0x01
@@ -110,95 +105,6 @@ struct att_range {
 	uint16_t start;
 	uint16_t end;
 };
-
-/* These functions do byte conversion */
-static inline uint8_t att_get_u8(const void *ptr)
-{
-	const uint8_t *u8_ptr = ptr;
-	return bt_get_unaligned(u8_ptr);
-}
-
-static inline uint16_t att_get_u16(const void *ptr)
-{
-	const uint16_t *u16_ptr = ptr;
-	return btohs(bt_get_unaligned(u16_ptr));
-}
-
-static inline uint32_t att_get_u32(const void *ptr)
-{
-	const uint32_t *u32_ptr = ptr;
-	return btohl(bt_get_unaligned(u32_ptr));
-}
-
-static inline uint128_t att_get_u128(const void *ptr)
-{
-	const uint128_t *u128_ptr = ptr;
-	uint128_t dst;
-
-	btoh128(u128_ptr, &dst);
-
-	return dst;
-}
-
-static inline void att_put_u8(uint8_t src, void *dst)
-{
-	bt_put_unaligned(src, (uint8_t *) dst);
-}
-
-static inline void att_put_u16(uint16_t src, void *dst)
-{
-	bt_put_unaligned(htobs(src), (uint16_t *) dst);
-}
-
-static inline void att_put_u32(uint32_t src, void *dst)
-{
-	bt_put_unaligned(htobl(src), (uint32_t *) dst);
-}
-
-static inline void att_put_u128(uint128_t src, void *dst)
-{
-	uint128_t *d128 = dst;
-
-	htob128(&src, d128);
-}
-
-static inline void att_put_uuid16(bt_uuid_t src, void *dst)
-{
-	att_put_u16(src.value.u16, dst);
-}
-
-static inline void att_put_uuid128(bt_uuid_t src, void *dst)
-{
-	att_put_u128(src.value.u128, dst);
-}
-
-static inline void att_put_uuid(bt_uuid_t src, void *dst)
-{
-	if (src.type == BT_UUID16)
-		att_put_uuid16(src, dst);
-	else
-		att_put_uuid128(src, dst);
-}
-
-static inline bt_uuid_t att_get_uuid16(const void *ptr)
-{
-	bt_uuid_t uuid;
-
-	bt_uuid16_create(&uuid, att_get_u16(ptr));
-
-	return uuid;
-}
-
-static inline bt_uuid_t att_get_uuid128(const void *ptr)
-{
-	bt_uuid_t uuid;
-	uint128_t value;
-
-	value  = att_get_u128(ptr);
-	bt_uuid128_create(&uuid, value);
-
-	return uuid;
-}
 
 struct att_data_list *att_data_list_alloc(uint16_t num, uint16_t len);
 void att_data_list_free(struct att_data_list *list);
@@ -228,6 +134,16 @@ uint16_t enc_write_cmd(uint16_t handle, const uint8_t *value, size_t vlen,
 						uint8_t *pdu, size_t len);
 uint16_t dec_write_cmd(const uint8_t *pdu, size_t len, uint16_t *handle,
 						uint8_t *value, size_t *vlen);
+uint16_t enc_signed_write_cmd(uint16_t handle,
+					const uint8_t *value, size_t vlen,
+					struct bt_crypto *crypto,
+					const uint8_t csrk[16],
+					uint32_t sign_cnt,
+					uint8_t *pdu, size_t len);
+uint16_t dec_signed_write_cmd(const uint8_t *pdu, size_t len,
+						uint16_t *handle,
+						uint8_t *value, size_t *vlen,
+						uint8_t signature[12]);
 struct att_data_list *dec_read_by_type_resp(const uint8_t *pdu, size_t len);
 uint16_t enc_write_req(uint16_t handle, const uint8_t *value, size_t vlen,
 						uint8_t *pdu, size_t len);

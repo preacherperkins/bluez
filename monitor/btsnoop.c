@@ -2,22 +2,22 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2011-2012  Intel Corporation
- *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2011-2014  Intel Corporation
+ *  Copyright (C) 2002-2010  Marcel Holtmann <marcel@holtmann.org>
  *
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License as published by the Free Software Foundation; either
+ *  version 2.1 of the License, or (at your option) any later version.
  *
- *  This program is distributed in the hope that it will be useful,
+ *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
@@ -82,8 +82,8 @@ void btsnoop_create(const char *path, uint32_t type)
 	btsnoop_type = type;
 
 	memcpy(hdr.id, btsnoop_id, sizeof(btsnoop_id));
-	hdr.version = htonl(btsnoop_version);
-	hdr.type = htonl(btsnoop_type);
+	hdr.version = htobe32(btsnoop_version);
+	hdr.type = htobe32(btsnoop_type);
 
 	written = write(btsnoop_fd, &hdr, BTSNOOP_HDR_SIZE);
 	if (written < 0) {
@@ -102,11 +102,11 @@ void btsnoop_write(struct timeval *tv, uint32_t flags,
 
 	ts = (tv->tv_sec - 946684800ll) * 1000000ll + tv->tv_usec;
 
-	pkt.size  = htonl(size);
-	pkt.len   = htonl(size);
-	pkt.flags = htonl(flags);
-	pkt.drops = htonl(0);
-	pkt.ts    = hton64(ts + 0x00E03AB44A676000ll);
+	pkt.size  = htobe32(size);
+	pkt.len   = htobe32(size);
+	pkt.flags = htobe32(flags);
+	pkt.drops = htobe32(0);
+	pkt.ts    = htobe64(ts + 0x00E03AB44A676000ll);
 
 	written = write(btsnoop_fd, &pkt, BTSNOOP_PKT_SIZE);
 	if (written < 0)
@@ -165,7 +165,7 @@ void btsnoop_write_hci(struct timeval *tv, uint16_t index, uint16_t opcode,
 			return;
 		break;
 
-	case BTSNOOP_TYPE_EXTENDED_HCI:
+	case BTSNOOP_TYPE_MONITOR:
 		flags = (index << 16) | opcode;
 		break;
 
@@ -188,7 +188,7 @@ void btsnoop_write_phy(struct timeval *tv, uint16_t frequency,
 		return;
 
 	switch (btsnoop_type) {
-	case BTSNOOP_TYPE_EXTENDED_PHY:
+	case BTSNOOP_TYPE_SIMULATOR:
 		flags = (1 << 16) | frequency;
 		break;
 
@@ -230,14 +230,14 @@ int btsnoop_open(const char *path, uint32_t *type)
 		return -1;
 	}
 
-	if (ntohl(hdr.version) != btsnoop_version) {
+	if (be32toh(hdr.version) != btsnoop_version) {
 		fprintf(stderr, "Invalid btsnoop version\n");
 		close(btsnoop_fd);
 		btsnoop_fd = -1;
 		return -1;
 	}
 
-	btsnoop_type = ntohl(hdr.type);
+	btsnoop_type = be32toh(hdr.type);
 
 	if (type)
 		*type = btsnoop_type;
@@ -303,10 +303,17 @@ int btsnoop_read_hci(struct timeval *tv, uint16_t *index, uint16_t *opcode,
 		return -1;
 	}
 
-	toread = ntohl(pkt.size);
-	flags = ntohl(pkt.flags);
+	toread = be32toh(pkt.size);
+	if (toread > BTSNOOP_MAX_PACKET_SIZE) {
+		perror("Packet len suspicially big: %u", toread);
+		close(btsnoop_fd);
+		btsnoop_fd = -1;
+		return -1;
+	}
 
-	ts = ntoh64(pkt.ts) - 0x00E03AB44A676000ll;
+	flags = be32toh(pkt.flags);
+
+	ts = be64toh(pkt.ts) - 0x00E03AB44A676000ll;
 	tv->tv_sec = (ts / 1000000ll) + 946684800ll;
 	tv->tv_usec = ts % 1000000ll;
 
@@ -330,7 +337,7 @@ int btsnoop_read_hci(struct timeval *tv, uint16_t *index, uint16_t *opcode,
 		*opcode = get_opcode_from_flags(pkt_type, flags);
 		break;
 
-	case BTSNOOP_TYPE_EXTENDED_HCI:
+	case BTSNOOP_TYPE_MONITOR:
 		*index = flags >> 16;
 		*opcode = flags & 0xffff;
 		break;
@@ -377,15 +384,15 @@ int btsnoop_read_phy(struct timeval *tv, uint16_t *frequency,
 		return -1;
 	}
 
-	toread = ntohl(pkt.size);
-	flags = ntohl(pkt.flags);
+	toread = be32toh(pkt.size);
+	flags = be32toh(pkt.flags);
 
-	ts = ntoh64(pkt.ts) - 0x00E03AB44A676000ll;
+	ts = be64toh(pkt.ts) - 0x00E03AB44A676000ll;
 	tv->tv_sec = (ts / 1000000ll) + 946684800ll;
 	tv->tv_usec = ts % 1000000ll;
 
 	switch (btsnoop_type) {
-	case BTSNOOP_TYPE_EXTENDED_PHY:
+	case BTSNOOP_TYPE_SIMULATOR:
 		if ((flags >> 16) != 1)
 			break;
 		*frequency = flags & 0xffff;

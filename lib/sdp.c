@@ -67,6 +67,9 @@ static uint128_t bluetooth_base_uuid = {
 
 #define SDP_MAX_ATTR_LEN 65535
 
+/* match MTU used by RFCOMM */
+#define SDP_LARGE_L2CAP_MTU 1013
+
 static sdp_data_t *sdp_copy_seq(sdp_data_t *data);
 static int sdp_attr_add_new_with_length(sdp_record_t *rec,
 	uint16_t attr, uint8_t dtd, const void *value, uint32_t len);
@@ -178,8 +181,9 @@ static struct tupla ServiceClass[] = {
 	{ HDP_SVCLASS_ID,			"HDP"				},
 	{ HDP_SOURCE_SVCLASS_ID,		"HDP Source"			},
 	{ HDP_SINK_SVCLASS_ID,			"HDP Sink"			},
-	{ APPLE_AGENT_SVCLASS_ID,		"Apple Agent"			},
+	{ GENERIC_ACCESS_SVCLASS_ID,		"Generic Access"		},
 	{ GENERIC_ATTRIB_SVCLASS_ID,		"Generic Attribute"		},
+	{ APPLE_AGENT_SVCLASS_ID,		"Apple Agent"			},
 	{ 0 }
 };
 
@@ -1601,13 +1605,13 @@ void sdp_record_print(const sdp_record_t *rec)
 {
 	sdp_data_t *d = sdp_data_get(rec, SDP_ATTR_SVCNAME_PRIMARY);
 	if (d && SDP_IS_TEXT_STR(d->dtd))
-		printf("Service Name: %.*s", d->unitSize, d->val.str);
+		printf("Service Name: %.*s\n", d->unitSize, d->val.str);
 	d = sdp_data_get(rec, SDP_ATTR_SVCDESC_PRIMARY);
 	if (d && SDP_IS_TEXT_STR(d->dtd))
-		printf("Service Description: %.*s", d->unitSize, d->val.str);
+		printf("Service Description: %.*s\n", d->unitSize, d->val.str);
 	d = sdp_data_get(rec, SDP_ATTR_PROVNAME_PRIMARY);
 	if (d && SDP_IS_TEXT_STR(d->dtd))
-		printf("Service Provider: %.*s", d->unitSize, d->val.str);
+		printf("Service Provider: %.*s\n", d->unitSize, d->val.str);
 }
 
 #ifdef SDP_DEBUG
@@ -3855,7 +3859,7 @@ int sdp_service_search_async(sdp_session_t *session, const sdp_list_t *search, u
 	reqhdr->plen = htons((t->reqsize + cstate_len) - sizeof(sdp_pdu_hdr_t));
 
 	if (sdp_send_req(session, t->reqbuf, t->reqsize + cstate_len) < 0) {
-		SDPERR("Error sendind data:%m");
+		SDPERR("Error sending data:%m");
 		t->err = errno;
 		goto end;
 	}
@@ -3966,7 +3970,7 @@ int sdp_service_attr_async(sdp_session_t *session, uint32_t handle, sdp_attrreq_
 	reqhdr->plen = htons((t->reqsize + cstate_len) - sizeof(sdp_pdu_hdr_t));
 
 	if (sdp_send_req(session, t->reqbuf, t->reqsize + cstate_len) < 0) {
-		SDPERR("Error sendind data:%m");
+		SDPERR("Error sending data:%m");
 		t->err = errno;
 		goto end;
 	}
@@ -4082,7 +4086,7 @@ int sdp_service_search_attr_async(sdp_session_t *session, const sdp_list_t *sear
 	reqhdr->plen = htons((t->reqsize + cstate_len) - sizeof(sdp_pdu_hdr_t));
 
 	if (sdp_send_req(session, t->reqbuf, t->reqsize + cstate_len) < 0) {
-		SDPERR("Error sendind data:%m");
+		SDPERR("Error sending data:%m");
 		t->err = errno;
 		goto end;
 	}
@@ -4177,10 +4181,15 @@ int sdp_process(sdp_session_t *session)
 		goto end;
 	}
 
-	if (n == 0 || reqhdr->tid != rsphdr->tid ||
-		(n != (int) (ntohs(rsphdr->plen) + sizeof(sdp_pdu_hdr_t)))) {
+	if (reqhdr->tid != rsphdr->tid) {
 		t->err = EPROTO;
-		SDPERR("Protocol error.");
+		SDPERR("Protocol error: transaction id does not match");
+		goto end;
+	}
+
+	if (n != (int) (ntohs(rsphdr->plen) + sizeof(sdp_pdu_hdr_t))) {
+		t->err = EPROTO;
+		SDPERR("Protocol error: invalid length");
 		goto end;
 	}
 
@@ -4323,7 +4332,7 @@ int sdp_process(sdp_session_t *session)
 		reqhdr->plen = htons(reqsize - sizeof(sdp_pdu_hdr_t));
 
 		if (sdp_send_req(session, t->reqbuf, reqsize) < 0) {
-			SDPERR("Error sendind data:%m(%d)", errno);
+			SDPERR("Error sending data:%m(%d)", errno);
 			status = 0xffff;
 			t->err = errno;
 			goto end;
@@ -4644,6 +4653,26 @@ static int sdp_connect_local(sdp_session_t *session)
 	return connect(session->sock, (struct sockaddr *) &sa, sizeof(sa));
 }
 
+static int set_l2cap_mtu(int sk, uint16_t mtu)
+{
+	struct l2cap_options l2o;
+	socklen_t len;
+
+	memset(&l2o, 0, sizeof(l2o));
+	len = sizeof(l2o);
+
+	if (getsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &l2o, &len) < 0)
+		return -1;
+
+	l2o.imtu = mtu;
+	l2o.omtu = mtu;
+
+	if (setsockopt(sk, SOL_L2CAP, L2CAP_OPTIONS, &l2o, sizeof(l2o)) < 0)
+		return -1;
+
+	return 0;
+}
+
 static int sdp_connect_l2cap(const bdaddr_t *src,
 		const bdaddr_t *dst, sdp_session_t *session)
 {
@@ -4677,6 +4706,10 @@ static int sdp_connect_l2cap(const bdaddr_t *src,
 		struct linger l = { .l_onoff = 1, .l_linger = 1 };
 		setsockopt(sk, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
 	}
+
+	if ((flags & SDP_LARGE_MTU) &&
+				set_l2cap_mtu(sk, SDP_LARGE_L2CAP_MTU) < 0)
+		return -1;
 
 	sa.l2_psm = htobs(SDP_PSM);
 	sa.l2_bdaddr = *dst;
@@ -4773,7 +4806,7 @@ int sdp_set_supp_feat(sdp_record_t *rec, const sdp_list_t *sf)
 			free(dtds);
 			goto fail;
 		}
-		lengths = malloc(plen * sizeof(int *));
+		lengths = malloc(plen * sizeof(int));
 		if (!lengths) {
 			free(dtds);
 			free(vals);

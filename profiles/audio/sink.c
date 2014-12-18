@@ -37,18 +37,18 @@
 #include <dbus/dbus.h>
 #include <gdbus/gdbus.h>
 
-#include "log.h"
+#include "src/log.h"
 
 #include "src/adapter.h"
 #include "src/device.h"
 #include "src/service.h"
+#include "src/error.h"
+#include "src/dbus-common.h"
 
 #include "avdtp.h"
 #include "media.h"
 #include "a2dp.h"
-#include "error.h"
 #include "sink.h"
-#include "dbus-common.h"
 
 #define STREAM_SETUP_RETRY_TIMER 2
 
@@ -229,11 +229,14 @@ static void discovery_complete(struct avdtp *session, GSList *seps, struct avdtp
 	if (err) {
 		avdtp_unref(sink->session);
 		sink->session = NULL;
-		if (avdtp_error_category(err) == AVDTP_ERRNO
-				&& avdtp_error_posix_errno(err) != EHOSTDOWN) {
-			perr = -EAGAIN;
-		} else
-			perr = -EIO;
+
+		perr = -avdtp_error_posix_errno(err);
+		if (perr != -EHOSTDOWN) {
+			if (avdtp_error_category(err) == AVDTP_ERRNO)
+				perr = -EAGAIN;
+			else
+				perr = -EIO;
+		}
 		goto failed;
 	}
 
@@ -388,15 +391,12 @@ gboolean sink_new_stream(struct btd_service *service, struct avdtp *session,
 	return TRUE;
 }
 
-int sink_disconnect(struct btd_service *service, gboolean shutdown)
+int sink_disconnect(struct btd_service *service)
 {
 	struct sink *sink = btd_service_get_user_data(service);
 
 	if (!sink->session)
 		return -ENOTCONN;
-
-	if (shutdown)
-		avdtp_set_device_disconnect(sink->session, TRUE);
 
 	/* cancel pending connect */
 	if (sink->connect_id > 0) {
