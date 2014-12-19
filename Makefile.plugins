@@ -117,6 +117,11 @@ builtin_sources += profiles/arc/arc.c         \
 		   profiles/arc/arc.h         \
 		   profiles/arc/arc-proxy.c   \
 		   profiles/arc/arc-server.c
+
+builtin_modules += aui
+builtin_sources += profiles/aui/aui.c \
+		   profiles/aui/aui.h
+
 endif
 
 if SIXAXIS
@@ -126,14 +131,4 @@ plugins_sixaxis_la_LDFLAGS = $(AM_LDFLAGS) -module -avoid-version \
 						-no-undefined @UDEV_LIBS@
 plugins_sixaxis_la_CFLAGS = $(AM_CFLAGS) -fvisibility=hidden @UDEV_CFLAGS@
 endif
-
-builtin_modules += arc
-builtin_sources += profiles/arc/arc.c \
-		profiles/arc/arc.h \
-		profiles/arc/arc-proxy.c \
-		profiles/arc/arc-server.c
-
-builtin_modules += aui
-builtin_sources += profiles/aui/aui.c \
-		   profiles/aui/aui.h
 
