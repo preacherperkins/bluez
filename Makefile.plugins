@@ -112,11 +112,11 @@ builtin_sources += profiles/heartrate/heartrate.c
 builtin_modules += cyclingspeed
 builtin_sources += profiles/cyclingspeed/cyclingspeed.c
 
-builtin_modules += arc
-builtin_sources += profiles/arc/arc.c         \
-		   profiles/arc/arc.h         \
-		   profiles/arc/arc-proxy.c   \
-		   profiles/arc/arc-server.c
+# builtin_modules += arc
+# builtin_sources += profiles/arc/arc.c         \
+# 		   profiles/arc/arc.h         	\
+# 		   profiles/arc/arc-proxy.c   	\
+# 		   profiles/arc/arc-server.c
 
 builtin_modules += aui
 builtin_sources += profiles/aui/aui.c \

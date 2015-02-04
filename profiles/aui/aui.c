@@ -108,15 +108,15 @@ static uint8_t on_aui_ble_get_abs_volume(struct attribute *a, struct btd_device 
 
 	if(!g_dbus_proxy_get_property(self->volumed_proxy, "TuneVolume", &iter)) {
 		error("AUI: ERROR: Could not get 'TuneVolume' property from VolumeD. Returning 0");
-		strcpy(btd_volume, "0.0");
+		strncpy(btd_volume, "0.0", sizeof(btd_volume));
 	}
 	else {
 		dbus_message_iter_get_basic(&iter, &dbus_volume);
-		sprintf(btd_volume, "%f", dbus_volume);
+		snprintf(btd_volume, sizeof(btd_volume), "%f", dbus_volume);
 	}
 
 	DBG("AUI: %s: Returning volume: '%f'", __FUNCTION__, dbus_volume);
-	attrib_db_update(self->adapter, a->handle, NULL, btd_volume, sizeof(btd_volume), NULL);
+	attrib_db_update(self->adapter, a->handle, NULL, (uint8_t*)btd_volume, sizeof(btd_volume), NULL);
 
 	return 0;
 }
@@ -182,7 +182,6 @@ static gboolean on_aui_dbus_cmd(const GDBusPropertyTable *property,
 static gboolean volumed_proxy_init(struct Self *self)
 {
 	GDBusClient *client;
-	GDBusProxy  *proxy;
 
 	client = g_dbus_client_new(btd_get_dbus_connection(), "com.aether.Volume", "/com/aether/Volume");
 	if (!client) {
