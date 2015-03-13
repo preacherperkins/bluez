@@ -105,9 +105,23 @@ ATT/GATT (new shared stack)
   Priority: Medium
   Complexity: C1
 
-- Properly handle indications from the "Service Changed" characteristic.
-  shared/gatt-client should automatically rediscover all changed GATT services
-  and notify the upper layer using a specially assigned handler.
+- Add complete GATT test coverage in unit/test-gatt following the GATT test
+  spec. This could use shared/gatt-client and shared/gatt-server at the same
+  time to test both against eachother. We should definitely have tests for
+  gatt-server and gatt-client simultaneously on one side of the connection.
+
+  Priority: High
+  Complexity: C4
+
+- Define packed structs for ATT protocol PDUs in shared/att-types to improve
+  readability. We should probably do this once there are extensive unit tests
+  for gatt-client/gatt-server so that we don't accidentally break working code.
+
+  Priority: Medium
+  Complexity: C2
+
+- Use struct iovec to pass around byte buffers that will be sent over the wire,
+  instead of passing uint8_t and size_t parameters everywhere.
 
   Priority: Medium
   Complexity: C1
@@ -147,11 +161,18 @@ ATT/GATT (new shared stack)
   Priority: Medium
   Complexity: C2
 
-- Introduce shared/gatt-server, which combined with shared/gatt-db, can be used
-  as a GATT server implementation.
+- Introduce a way for shared/gatt-server to check security permissions on the
+  current connection through bt_att.
 
   Priority: Medium
   Complexity: C2
+
+- Implement other low-priority ATT protocol operations for shared/gatt-server:
+
+      Read Multiple Request
+
+  Priority: Low
+  Complexity: C1
 
 - Implement the server portion of doc/gatt-api.txt using shared/gatt-server once
   it exists.

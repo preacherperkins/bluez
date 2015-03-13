@@ -3,7 +3,9 @@ LOCAL_PATH := external/bluetooth
 # Retrieve BlueZ version from configure.ac file
 BLUEZ_VERSION := `grep "^AC_INIT" $(LOCAL_PATH)/bluez/configure.ac | sed -e "s/.*,.\(.*\))/\1/"`
 
-ANDROID_VERSION := `echo $(PLATFORM_VERSION) | awk -F. '{ printf "0x%02d%02d%02d",$$1,$$2,$$3 }'`
+ANDROID_VERSION := $(shell echo $(PLATFORM_VERSION) | awk -F. '{ printf "0x%02d%02d%02d",$$1,$$2,$$3 }')
+
+ANDROID_GE_5_0_0 := $(shell test `echo $$(($(ANDROID_VERSION)))` -lt `echo $$((0x050000))`; echo $$?)
 
 # Specify pathmap for glib and sbc
 pathmap_INCL += glib:external/bluetooth/glib \
@@ -13,10 +15,6 @@ pathmap_INCL += glib:external/bluetooth/glib \
 BLUEZ_COMMON_CFLAGS := -DVERSION=\"$(BLUEZ_VERSION)\" \
 			-DANDROID_VERSION=$(ANDROID_VERSION) \
 			-DANDROID_STORAGEDIR=\"/data/misc/bluetooth\" \
-
-ifeq ($(BLUEZ_EXTENSIONS), true)
-BLUEZ_COMMON_CFLAGS += -DBLUEZ_EXTENSIONS
-endif
 
 # Enable warnings enabled in autotools build
 BLUEZ_COMMON_CFLAGS += -Wall -Wextra \
@@ -48,6 +46,7 @@ LOCAL_SRC_FILES := \
 	bluez/android/ipc.c \
 	bluez/android/avdtp.c \
 	bluez/android/a2dp.c \
+	bluez/android/a2dp-sink.c \
 	bluez/android/avctp.c \
 	bluez/android/avrcp.c \
 	bluez/android/avrcp-lib.c \
@@ -56,8 +55,10 @@ LOCAL_SRC_FILES := \
 	bluez/android/handsfree-client.c \
 	bluez/android/gatt.c \
 	bluez/android/health.c \
-	bluez/android/mcap-lib.c \
-	bluez/src/log.c \
+	bluez/android/sco.c \
+	bluez/profiles/health/mcap.c \
+	bluez/android/map-client.c \
+	bluez/android/log.c \
 	bluez/src/shared/mgmt.c \
 	bluez/src/shared/util.c \
 	bluez/src/shared/queue.c \
@@ -65,8 +66,10 @@ LOCAL_SRC_FILES := \
 	bluez/src/shared/hfp.c \
 	bluez/src/shared/gatt-db.c \
 	bluez/src/shared/io-glib.c \
+	bluez/src/shared/timeout-glib.c \
 	bluez/src/shared/crypto.c \
 	bluez/src/shared/uhid.c \
+	bluez/src/shared/att.c \
 	bluez/src/sdpd-database.c \
 	bluez/src/sdpd-service.c \
 	bluez/src/sdpd-request.c \
@@ -133,8 +136,12 @@ LOCAL_SRC_FILES := \
 	bluez/android/hal-utils.c \
 	bluez/android/hal-health.c \
 
-ifeq ($(BLUEZ_EXTENSIONS), true)
-LOCAL_SRC_FILES += bluez/android/hal-handsfree-client.c
+ifeq ($(ANDROID_GE_5_0_0), 1)
+LOCAL_SRC_FILES += \
+	bluez/android/hal-handsfree-client.c \
+	bluez/android/hal-map-client.c \
+	bluez/android/hal-a2dp-sink.c \
+	bluez/android/hal-avrcp-ctrl.c
 endif
 
 LOCAL_C_INCLUDES += \
@@ -147,7 +154,7 @@ LOCAL_SHARED_LIBRARIES := \
 LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
 
 LOCAL_MODULE := bluetooth.default
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
+LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_REQUIRED_MODULES := bluetoothd bluetoothd-snoop init.bluetooth.rc
@@ -179,6 +186,14 @@ LOCAL_SRC_FILES := \
 	bluez/android/client/if-gatt.c \
 	bluez/android/hal-utils.c \
 
+ifeq ($(ANDROID_GE_5_0_0), 1)
+LOCAL_SRC_FILES += \
+	bluez/android/client/if-hf-client.c \
+	bluez/android/client/if-mce.c \
+	bluez/android/client/if-av-sink.c \
+	bluez/android/client/if-rc-ctrl.c
+endif
+
 LOCAL_C_INCLUDES += \
 	$(call include-path-for, system-core) \
 	$(call include-path-for, libhardware) \
@@ -186,9 +201,11 @@ LOCAL_C_INCLUDES += \
 LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/bluez/android \
 
-LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
+LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS) -Wno-declaration-after-statement
 
-LOCAL_SHARED_LIBRARIES := libhardware
+LOCAL_SHARED_LIBRARIES := \
+	libhardware \
+	libcutils \
 
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 LOCAL_MODULE_TAGS := debug
@@ -207,8 +224,8 @@ LOCAL_SRC_FILES := \
 	bluez/btio/btio.c \
 	bluez/lib/bluetooth.c \
 	bluez/lib/hci.c \
-	bluez/android/mcap-lib.c \
-	bluez/android/mcaptest.c \
+	bluez/profiles/health/mcap.c \
+	bluez/tools/mcaptest.c \
 
 LOCAL_C_INCLUDES := \
 	$(call include-path-for, glib) \
@@ -279,6 +296,7 @@ LOCAL_SRC_FILES := \
 	bluez/monitor/packet.c \
 	bluez/monitor/l2cap.c \
 	bluez/monitor/avctp.c \
+	bluez/monitor/rfcomm.c \
 	bluez/monitor/uuid.c \
 	bluez/monitor/sdp.c \
 	bluez/monitor/vendor.c \
@@ -343,7 +361,6 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := \
-	bluez/src/shared/queue.c \
 	bluez/android/hal-audio.c \
 	bluez/android/hal-audio-sbc.c \
 	bluez/android/hal-audio-aptx.c \
@@ -358,10 +375,10 @@ LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libsbc \
 
-LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
+LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS) -Wno-declaration-after-statement
 LOCAL_LDFLAGS := -ldl
 
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
+LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE := audio.a2dp.default
 
@@ -373,7 +390,8 @@ include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 
-LOCAL_SRC_FILES := bluez/android/hal-sco.c
+LOCAL_SRC_FILES := bluez/android/hal-sco.c \
+	bluez/android/hal-utils.c
 
 LOCAL_C_INCLUDES = \
 	$(call include-path-for, system-core) \
@@ -384,9 +402,9 @@ LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libaudioutils \
 
-LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
+LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS) -Wno-declaration-after-statement
 
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
+LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE := audio.sco.default
 
@@ -429,6 +447,7 @@ LOCAL_SRC_FILES := \
 	bluez/android/bluetoothd-snoop.c \
 	bluez/monitor/mainloop.c \
 	bluez/src/shared/btsnoop.c \
+	bluez/android/log.c \
 
 LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/bluez \
@@ -472,6 +491,7 @@ LOCAL_SRC_FILES := \
 	bluez/src/shared/mgmt.c \
 	bluez/src/shared/queue.c \
 	bluez/src/shared/util.c \
+	bluez/src/shared/gap.c \
 	bluez/src/uuid-helper.c \
 
 LOCAL_C_INCLUDES := \
@@ -513,6 +533,34 @@ LOCAL_STATIC_LIBRARIES := \
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 LOCAL_MODULE_TAGS := debug
 LOCAL_MODULE := hcitool
+
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/bluez/configure.ac
+
+include $(BUILD_EXECUTABLE)
+
+#
+# hciconfig
+#
+
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES:= \
+	bluez/tools/hciconfig.c \
+	bluez/tools/csr.c \
+	bluez/lib/bluetooth.c \
+	bluez/lib/hci.c \
+
+LOCAL_C_INCLUDES := \
+	$(LOCAL_PATH)/bluez \
+
+LOCAL_CFLAGS := $(BLUEZ_COMMON_CFLAGS)
+
+LOCAL_STATIC_LIBRARIES := \
+	bluetooth-headers \
+
+LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
+LOCAL_MODULE_TAGS := debug
+LOCAL_MODULE := hciconfig
 
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/bluez/configure.ac
 

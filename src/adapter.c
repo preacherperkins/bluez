@@ -206,6 +206,7 @@ struct btd_adapter {
 	gboolean initialized;
 
 	GSList *pin_callbacks;
+	GSList *msd_callbacks;
 
 	GSList *drivers;
 	GSList *profiles;
@@ -1090,8 +1091,10 @@ static void service_auth_cancel(struct service_auth *auth)
 
 	dbus_error_free(&derr);
 
-	if (auth->agent != NULL)
+	if (auth->agent != NULL) {
+		agent_cancel(auth->agent);
 		agent_unref(auth->agent);
+	}
 
 	g_free(auth);
 }
@@ -4549,6 +4552,9 @@ static void adapter_remove(struct btd_adapter *adapter)
 
 	g_slist_free(adapter->pin_callbacks);
 	adapter->pin_callbacks = NULL;
+
+	g_slist_free(adapter->msd_callbacks);
+	adapter->msd_callbacks = NULL;
 }
 
 const char *adapter_get_path(struct btd_adapter *adapter)
@@ -4647,6 +4653,29 @@ static void confirm_name(struct btd_adapter *adapter, const bdaddr_t *bdaddr,
 						confirm_name_timeout, adapter);
 }
 
+static void adapter_msd_notify(struct btd_adapter *adapter,
+							struct btd_device *dev,
+							GSList *msd_list)
+{
+	GSList *cb_l, *cb_next;
+	GSList *msd_l, *msd_next;
+
+	for (cb_l = adapter->msd_callbacks; cb_l != NULL; cb_l = cb_next) {
+		btd_msd_cb_t cb = cb_l->data;
+
+		cb_next = g_slist_next(cb_l);
+
+		for (msd_l = msd_list; msd_l != NULL; msd_l = msd_next) {
+			const struct eir_msd *msd = msd_l->data;
+
+			msd_next = g_slist_next(msd_l);
+
+			cb(adapter, dev, msd->company, msd->data,
+								msd->data_len);
+		}
+	}
+}
+
 static void update_found_devices(struct btd_adapter *adapter,
 					const bdaddr_t *bdaddr,
 					uint8_t bdaddr_type, int8_t rssi,
@@ -4737,6 +4766,9 @@ static void update_found_devices(struct btd_adapter *adapter,
 							eir_data.did_version);
 
 	device_add_eir_uuids(dev, eir_data.services);
+
+	if (eir_data.msd_list)
+		adapter_msd_notify(adapter, dev, eir_data.msd_list);
 
 	eir_data_free(&eir_data);
 
@@ -5143,8 +5175,10 @@ int btd_cancel_authorization(guint id)
 
 	g_queue_remove(auth->adapter->auths, auth);
 
-	if (auth->agent)
+	if (auth->agent) {
+		agent_cancel(auth->agent);
 		agent_unref(auth->agent);
+	}
 
 	g_free(auth);
 
@@ -5171,6 +5205,18 @@ void btd_adapter_unregister_pin_cb(struct btd_adapter *adapter,
 							btd_adapter_pin_cb_t cb)
 {
 	adapter->pin_callbacks = g_slist_remove(adapter->pin_callbacks, cb);
+}
+
+void btd_adapter_unregister_msd_cb(struct btd_adapter *adapter,
+							btd_msd_cb_t cb)
+{
+	adapter->msd_callbacks = g_slist_remove(adapter->msd_callbacks, cb);
+}
+
+void btd_adapter_register_msd_cb(struct btd_adapter *adapter,
+							btd_msd_cb_t cb)
+{
+	adapter->msd_callbacks = g_slist_prepend(adapter->msd_callbacks, cb);
 }
 
 int btd_adapter_set_fast_connectable(struct btd_adapter *adapter,
@@ -6343,10 +6389,10 @@ int btd_adapter_add_remote_oob_data(struct btd_adapter *adapter,
 
 	memset(&cp, 0, sizeof(cp));
 	bacpy(&cp.addr.bdaddr, bdaddr);
-	memcpy(cp.hash, hash, 16);
+	memcpy(cp.hash192, hash, 16);
 
 	if (randomizer)
-		memcpy(cp.randomizer, randomizer, 16);
+		memcpy(cp.rand192, randomizer, 16);
 
 	if (mgmt_send(adapter->mgmt, MGMT_OP_ADD_REMOTE_OOB_DATA,
 				adapter->dev_id, sizeof(cp), &cp,
@@ -6626,6 +6672,7 @@ static void connected_callback(uint16_t index, uint16_t length,
 	struct eir_data eir_data;
 	uint16_t eir_len;
 	char addr[18];
+	bool name_known;
 
 	if (length < sizeof(*ev)) {
 		error("Too small device connected event");
@@ -6658,10 +6705,15 @@ static void connected_callback(uint16_t index, uint16_t length,
 
 	adapter_add_connection(adapter, device, ev->addr.type);
 
-	if (eir_data.name != NULL) {
+	name_known = device_name_known(device);
+
+	if (eir_data.name && (eir_data.name_complete || !name_known)) {
 		device_store_cached_name(device, eir_data.name);
 		btd_device_device_set_name(device, eir_data.name);
 	}
+
+	if (eir_data.msd_list)
+		adapter_msd_notify(adapter, device, eir_data.msd_list);
 
 	eir_data_free(&eir_data);
 }
@@ -6877,6 +6929,7 @@ static void read_info_complete(uint8_t status, uint16_t length,
 {
 	struct btd_adapter *adapter = user_data;
 	const struct mgmt_rp_read_info *rp = param;
+	uint32_t missing_settings;
 	int err;
 
 	DBG("index %u status 0x%02x", adapter->dev_id, status);
@@ -6911,11 +6964,52 @@ static void read_info_complete(uint8_t status, uint16_t length,
 	adapter->name = g_strdup((const char *) rp->name);
 	adapter->short_name = g_strdup((const char *) rp->short_name);
 
-	adapter->supported_settings = btohs(rp->supported_settings);
-	adapter->current_settings = btohs(rp->current_settings);
+	adapter->supported_settings = btohl(rp->supported_settings);
+	adapter->current_settings = btohl(rp->current_settings);
 
 	clear_uuids(adapter);
 	clear_devices(adapter);
+
+	missing_settings = adapter->current_settings ^
+						adapter->supported_settings;
+
+	switch (main_opts.mode) {
+	case BT_MODE_DUAL:
+		if (missing_settings & MGMT_SETTING_SSP)
+			set_mode(adapter, MGMT_OP_SET_SSP, 0x01);
+		if (missing_settings & MGMT_SETTING_LE)
+			set_mode(adapter, MGMT_OP_SET_LE, 0x01);
+		if (missing_settings & MGMT_SETTING_BREDR)
+			set_mode(adapter, MGMT_OP_SET_BREDR, 0x01);
+		break;
+	case BT_MODE_BREDR:
+		if (!(adapter->supported_settings & MGMT_SETTING_BREDR)) {
+			error("Ignoring adapter withouth BR/EDR support");
+			goto failed;
+		}
+
+		if (missing_settings & MGMT_SETTING_SSP)
+			set_mode(adapter, MGMT_OP_SET_SSP, 0x01);
+		if (missing_settings & MGMT_SETTING_BREDR)
+			set_mode(adapter, MGMT_OP_SET_BREDR, 0x01);
+		if (adapter->current_settings & MGMT_SETTING_LE)
+			set_mode(adapter, MGMT_OP_SET_LE, 0x00);
+		break;
+	case BT_MODE_LE:
+		if (!(adapter->supported_settings & MGMT_SETTING_LE)) {
+			error("Ignoring adapter withouth LE support");
+			goto failed;
+		}
+
+		if (missing_settings & MGMT_SETTING_LE)
+			set_mode(adapter, MGMT_OP_SET_LE, 0x01);
+		if (adapter->current_settings & MGMT_SETTING_BREDR)
+			set_mode(adapter, MGMT_OP_SET_BREDR, 0x00);
+		break;
+	}
+
+	if (missing_settings & MGMT_SETTING_SECURE_CONN)
+		set_mode(adapter, MGMT_OP_SET_SECURE_CONN, 0x01);
 
 	err = adapter_register(adapter);
 	if (err < 0) {
@@ -7034,14 +7128,6 @@ static void read_info_complete(uint8_t status, uint16_t length,
 	set_dev_class(adapter);
 
 	set_name(adapter, btd_adapter_get_name(adapter));
-
-	if ((adapter->supported_settings & MGMT_SETTING_SSP) &&
-			!(adapter->current_settings & MGMT_SETTING_SSP))
-		set_mode(adapter, MGMT_OP_SET_SSP, 0x01);
-
-	if ((adapter->supported_settings & MGMT_SETTING_LE) &&
-			!(adapter->current_settings & MGMT_SETTING_LE))
-		set_mode(adapter, MGMT_OP_SET_LE, 0x01);
 
 	if (!(adapter->current_settings & MGMT_SETTING_BONDABLE))
 		set_mode(adapter, MGMT_OP_SET_BONDABLE, 0x01);
@@ -7369,4 +7455,17 @@ void adapter_shutdown(void)
 
 	if (!adapter_remaining)
 		btd_exit();
+}
+
+/*
+ * Check if workaround for broken ATT server socket behavior is needed
+ * where we need to connect an ATT client socket before pairing to get
+ * early access to the ATT channel.
+ */
+bool btd_le_connect_before_pairing(void)
+{
+	if (MGMT_VERSION(mgmt_version, mgmt_revision) < MGMT_VERSION(1, 4))
+		return true;
+
+	return false;
 }

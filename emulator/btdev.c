@@ -525,7 +525,7 @@ struct btdev *btdev_create(enum btdev_type type, uint16_t id)
 	if (type == BTDEV_TYPE_BREDR)
 		btdev->version = 0x05;
 	else
-		btdev->version = 0x06;
+		btdev->version = 0x08;
 
 	btdev->revision = 0x0000;
 
@@ -1240,11 +1240,11 @@ static uint8_t get_link_key_type(struct btdev *btdev)
 		return 0x03;
 
 	if (btdev->secure_conn_support && remote->secure_conn_support) {
-		unauth = 0x04;
-		auth = 0x05;
-	} else {
 		unauth = 0x07;
 		auth = 0x08;
+	} else {
+		unauth = 0x04;
+		auth = 0x05;
 	}
 
 	if (btdev->io_cap == 0x03 || remote->io_cap == 0x03)
@@ -3026,10 +3026,18 @@ static void default_cmd_completion(struct btdev *btdev, uint16_t opcode,
 			return;
 		sce = data;
 		if (btdev->conn) {
-			encrypt_change(btdev, sce->encr_mode,
-							BT_HCI_ERR_SUCCESS);
-			encrypt_change(btdev->conn, sce->encr_mode,
-							BT_HCI_ERR_SUCCESS);
+			uint8_t mode;
+
+			if (!sce->encr_mode)
+				mode = 0x00;
+			else if (btdev->secure_conn_support &&
+					btdev->conn->secure_conn_support)
+				mode = 0x02;
+			else
+				mode = 0x01;
+
+			encrypt_change(btdev, mode, BT_HCI_ERR_SUCCESS);
+			encrypt_change(btdev->conn, mode, BT_HCI_ERR_SUCCESS);
 		}
 		break;
 

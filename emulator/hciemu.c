@@ -44,7 +44,7 @@
 #include "emulator/bthost.h"
 #include "src/shared/util.h"
 #include "src/shared/queue.h"
-#include "src/shared/hciemu.h"
+#include "emulator/hciemu.h"
 
 struct hciemu {
 	int ref_count;
@@ -179,6 +179,13 @@ static gboolean receive_btdev(GIOChannel *channel, GIOCondition condition,
 	fd = g_io_channel_unix_get_fd(channel);
 
 	len = read(fd, buf, sizeof(buf));
+	if (len < 0) {
+		if (errno == EAGAIN || errno == EINTR)
+			return TRUE;
+
+		return FALSE;
+	}
+
 	if (len < 1)
 		return FALSE;
 
@@ -368,8 +375,6 @@ void hciemu_unref(struct hciemu *hciemu)
 		return;
 
 	queue_destroy(hciemu->post_command_hooks, destroy_command_hook);
-
-	bthost_stop(hciemu->host_stack);
 
 	g_source_remove(hciemu->host_source);
 	g_source_remove(hciemu->client_source);

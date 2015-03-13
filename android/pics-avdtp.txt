@@ -1,6 +1,6 @@
 AVDTP PICS for the PTS tool.
 
-PTS version: 5.2
+PTS version: 6.0
 
 * - different than PTS defaults
 # - not yet implemented/supported
@@ -116,7 +116,7 @@ TSPC_AVDTP_8_4	True		Signal identifier (M)
 Parameter Name	Selected	Description
 -------------------------------------------------------------------------------
 TSPC_AVDTP_9_1	True (*)	Establish signaling channel (O)
-TSPC_AVDTP_9_1	True (*)	Disconnect signaling channel (O)
+TSPC_AVDTP_9_2	True (*)	Disconnect signaling channel (O)
 -------------------------------------------------------------------------------
 
 

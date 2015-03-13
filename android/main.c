@@ -62,6 +62,7 @@
 #include "gatt.h"
 #include "health.h"
 #include "handsfree-client.h"
+#include "map-client.h"
 #include "utils.h"
 
 #define DEFAULT_VENDOR "BlueZ"
@@ -69,13 +70,21 @@
 #define DEFAULT_NAME "BlueZ for Android"
 
 #define STARTUP_GRACE_SECONDS 5
-#define SHUTDOWN_GRACE_SECONDS 10
+#define SHUTDOWN_GRACE_SECONDS 5
 
 static char *config_vendor = NULL;
 static char *config_model = NULL;
 static char *config_name = NULL;
+static char *config_serial = NULL;
+static char *config_fw_rev = NULL;
+static char *config_hw_rev = NULL;
+static uint64_t config_system_id = 0;
+static uint16_t config_pnp_source = 0x0002;	/* USB */
+static uint16_t config_pnp_vendor = 0x1d6b;	/* Linux Foundation */
+static uint16_t config_pnp_product = 0x0247;	/* BlueZ for Android */
+static uint16_t config_pnp_version = 0x0000;
 
-static guint bluetooth_start_timeout = 0;
+static guint quit_timeout = 0;
 
 static bdaddr_t adapter_bdaddr;
 
@@ -107,6 +116,46 @@ const char *bt_config_get_model(void)
 		return config_model;
 
 	return DEFAULT_MODEL;
+}
+
+const char *bt_config_get_serial(void)
+{
+	return config_serial;
+}
+
+const char *bt_config_get_fw_rev(void)
+{
+	return config_fw_rev;
+}
+
+const char *bt_config_get_hw_rev(void)
+{
+	return config_hw_rev;
+}
+
+uint64_t bt_config_get_system_id(void)
+{
+	return config_system_id;
+}
+
+uint16_t bt_config_get_pnp_source(void)
+{
+	return config_pnp_source;
+}
+
+uint16_t bt_config_get_pnp_vendor(void)
+{
+	return config_pnp_vendor;
+}
+
+uint16_t bt_config_get_pnp_product(void)
+{
+	return config_pnp_product;
+}
+
+uint16_t bt_config_get_pnp_version(void)
+{
+	return config_pnp_version;
 }
 
 static void service_register(const void *buf, uint16_t len)
@@ -160,7 +209,8 @@ static void service_register(const void *buf, uint16_t len)
 
 		break;
 	case HAL_SERVICE_ID_HANDSFREE:
-		if (!bt_handsfree_register(hal_ipc, &adapter_bdaddr, m->mode)) {
+		if (!bt_handsfree_register(hal_ipc, &adapter_bdaddr, m->mode,
+							m->max_clients)) {
 			status = HAL_STATUS_FAILED;
 			goto failed;
 		}
@@ -182,6 +232,14 @@ static void service_register(const void *buf, uint16_t len)
 		break;
 	case HAL_SERVICE_ID_HANDSFREE_CLIENT:
 		if (!bt_hf_client_register(hal_ipc, &adapter_bdaddr)) {
+			status = HAL_STATUS_FAILED;
+			goto failed;
+		}
+
+		break;
+	case HAL_SERVICE_ID_MAP_CLIENT:
+		if (!bt_map_client_register(hal_ipc, &adapter_bdaddr,
+								m->mode)) {
 			status = HAL_STATUS_FAILED;
 			goto failed;
 		}
@@ -240,6 +298,9 @@ static bool unregister_service(uint8_t id)
 	case HAL_SERVICE_ID_HANDSFREE_CLIENT:
 		bt_hf_client_unregister();
 		break;
+	case HAL_SERVICE_ID_MAP_CLIENT:
+		bt_map_client_unregister();
+		break;
 	default:
 		DBG("service %u not supported", id);
 		return false;
@@ -284,6 +345,63 @@ static char *get_prop(char *prop, uint16_t len, const uint8_t *val)
 	return prop;
 }
 
+static void parse_pnp_id(uint16_t len, const uint8_t *val)
+{
+	int result;
+	uint16_t vendor, product, version , source;
+	char *pnp;
+
+	/* version is optional */
+	version = config_pnp_version;
+
+	pnp = get_prop(NULL, len, val);
+	if (!pnp)
+		return;
+
+	DBG("pnp_id %s", pnp);
+
+	result = sscanf(pnp, "bluetooth:%4hx:%4hx:%4hx",
+						&vendor, &product, &version);
+	if (result != EOF && result >= 2) {
+		source = 0x0001;
+		goto done;
+	}
+
+	result = sscanf(pnp, "usb:%4hx:%4hx:%4hx", &vendor, &product, &version);
+	if (result != EOF && result >= 2) {
+		source = 0x0002;
+		goto done;
+	}
+
+	free(pnp);
+	return;
+done:
+	free(pnp);
+
+	config_pnp_source = source;
+	config_pnp_vendor = vendor;
+	config_pnp_product = product;
+	config_pnp_version = version;
+}
+
+static void parse_system_id(uint16_t len, const uint8_t *val)
+{
+	uint64_t res;
+	char *id;
+
+	id = get_prop(NULL, len, val);
+	if (!id)
+		return;
+
+	res = strtoull(id, NULL, 16);
+	if (res == ULLONG_MAX && errno == ERANGE)
+		goto done;
+
+	config_system_id = res;
+done:
+	free(id);
+}
+
 static void configuration(const void *buf, uint16_t len)
 {
 	const struct hal_cmd_configuration *cmd = buf;
@@ -306,23 +424,38 @@ static void configuration(const void *buf, uint16_t len)
 		case HAL_CONFIG_VENDOR:
 			config_vendor = get_prop(config_vendor, prop->len,
 								prop->val);
-
 			DBG("vendor %s", config_vendor);
-
 			break;
 		case HAL_CONFIG_NAME:
 			config_name = get_prop(config_name, prop->len,
 								prop->val);
-
 			DBG("name %s", config_name);
-
 			break;
 		case HAL_CONFIG_MODEL:
 			config_model = get_prop(config_model, prop->len,
 								prop->val);
-
 			DBG("model %s", config_model);
-
+			break;
+		case HAL_CONFIG_SERIAL_NUMBER:
+			config_serial = get_prop(config_serial, prop->len,
+								prop->val);
+			DBG("serial %s", config_serial);
+			break;
+		case HAL_CONFIG_SYSTEM_ID:
+			parse_system_id(prop->len, prop->val);
+			break;
+		case HAL_CONFIG_PNP_ID:
+			parse_pnp_id(prop->len, prop->val);
+			break;
+		case HAL_CONFIG_FW_REV:
+			config_fw_rev = get_prop(config_fw_rev, prop->len,
+								prop->val);
+			DBG("fw_rev %s", config_fw_rev);
+			break;
+		case HAL_CONFIG_HW_REV:
+			config_hw_rev = get_prop(config_hw_rev, prop->len,
+								prop->val);
+			DBG("hw_rev %s", config_hw_rev);
 			break;
 		default:
 			error("Invalid configuration option (%u), terminating",
@@ -333,7 +466,6 @@ static void configuration(const void *buf, uint16_t len)
 
 		buf += sizeof(*prop) + prop->len;
 		len -= sizeof(*prop) + prop->len;
-		prop = buf;
 	}
 
 	ipc_send_rsp(hal_ipc, HAL_SERVICE_ID_CORE, HAL_OP_CONFIGURATION,
@@ -357,6 +489,9 @@ static void bluetooth_stopped(void)
 static gboolean quit_eventloop(gpointer user_data)
 {
 	g_main_loop_quit(event_loop);
+
+	quit_timeout = 0;
+
 	return FALSE;
 }
 
@@ -374,7 +509,8 @@ static void stop_bluetooth(void)
 		return;
 	}
 
-	g_timeout_add_seconds(SHUTDOWN_GRACE_SECONDS, quit_eventloop, NULL);
+	quit_timeout = g_timeout_add_seconds(SHUTDOWN_GRACE_SECONDS,
+							quit_eventloop, NULL);
 }
 
 static void ipc_disconnected(void *data)
@@ -391,9 +527,9 @@ static void adapter_ready(int err, const bdaddr_t *addr)
 
 	bacpy(&adapter_bdaddr, addr);
 
-	if (bluetooth_start_timeout > 0) {
-		g_source_remove(bluetooth_start_timeout);
-		bluetooth_start_timeout = 0;
+	if (quit_timeout > 0) {
+		g_source_remove(quit_timeout);
+		quit_timeout = 0;
 	}
 
 	info("Adapter initialized");
@@ -558,11 +694,23 @@ static bool set_capabilities(void)
 	return true;
 }
 
+static void set_version(void)
+{
+	uint8_t major, minor;
+
+	if (sscanf(VERSION, "%hhu.%hhu", &major, &minor) != 2)
+		return;
+
+	config_pnp_version = major << 8 | minor;
+}
+
 int main(int argc, char *argv[])
 {
 	GOptionContext *context;
 	GError *err = NULL;
 	guint signal;
+
+	set_version();
 
 	context = g_option_context_new(NULL);
 	g_option_context_add_main_entries(context, options, NULL);
@@ -599,9 +747,9 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	bluetooth_start_timeout = g_timeout_add_seconds(STARTUP_GRACE_SECONDS,
+	quit_timeout = g_timeout_add_seconds(STARTUP_GRACE_SECONDS,
 							quit_eventloop, NULL);
-	if (bluetooth_start_timeout == 0) {
+	if (quit_timeout == 0) {
 		error("Failed to init startup timeout");
 		__btd_log_cleanup();
 		g_source_remove(signal);
@@ -610,7 +758,7 @@ int main(int argc, char *argv[])
 
 	if (!bt_bluetooth_start(option_index, option_mgmt_dbg, adapter_ready)) {
 		__btd_log_cleanup();
-		g_source_remove(bluetooth_start_timeout);
+		g_source_remove(quit_timeout);
 		g_source_remove(signal);
 		return EXIT_FAILURE;
 	}
@@ -626,8 +774,8 @@ int main(int argc, char *argv[])
 
 	g_source_remove(signal);
 
-	if (bluetooth_start_timeout > 0)
-		g_source_remove(bluetooth_start_timeout);
+	if (quit_timeout > 0)
+		g_source_remove(quit_timeout);
 
 	cleanup_services();
 
@@ -648,6 +796,9 @@ int main(int argc, char *argv[])
 	free(config_vendor);
 	free(config_model);
 	free(config_name);
+	free(config_serial);
+	free(config_fw_rev);
+	free(config_hw_rev);
 
 	return EXIT_SUCCESS;
 }

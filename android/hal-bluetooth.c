@@ -116,6 +116,21 @@ static void adapter_prop_from_hal(const bt_property_t *property, uint8_t *type,
 	case HAL_PROP_ADAPTER_SCAN_MODE:
 		enum_prop_from_hal(property, len, val, bt_scan_mode_t);
 		break;
+	case BT_PROPERTY_BDNAME:
+	case BT_PROPERTY_BDADDR:
+	case BT_PROPERTY_UUIDS:
+	case BT_PROPERTY_CLASS_OF_DEVICE:
+	case BT_PROPERTY_TYPE_OF_DEVICE:
+	case BT_PROPERTY_SERVICE_RECORD:
+	case BT_PROPERTY_ADAPTER_BONDED_DEVICES:
+	case BT_PROPERTY_ADAPTER_DISCOVERY_TIMEOUT:
+	case BT_PROPERTY_REMOTE_FRIENDLY_NAME:
+	case BT_PROPERTY_REMOTE_RSSI:
+	case BT_PROPERTY_REMOTE_VERSION_INFO:
+	case BT_PROPERTY_REMOTE_DEVICE_TIMESTAMP:
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	case BT_PROPERTY_LOCAL_LE_FEATURES:
+#endif
 	default:
 		*len = property->len;
 		memcpy(val, property->val, property->len);
@@ -349,6 +364,26 @@ static void handle_le_test_mode(void *buf, uint16_t len, int fd)
 		bt_hal_cbacks->le_test_mode_cb(ev->status, ev->num_packets);
 }
 
+static void handle_energy_info(void *buf, uint16_t len, int fd)
+{
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	struct hal_ev_energy_info *ev = buf;
+	bt_activity_energy_info info;
+
+	DBG("");
+
+	info.ctrl_state = ev->ctrl_state;
+	info.energy_used = ev->energy_used;
+	info.idle_time = ev->idle_time;
+	info.rx_time = ev->rx_time;
+	info.status = ev->status;
+	info.tx_time = ev->status;
+
+	if (bt_hal_cbacks->energy_info_cb)
+		bt_hal_cbacks->energy_info_cb(&info);
+#endif
+}
+
 /*
  * handlers will be called from notification thread context,
  * index in table equals to 'opcode - HAL_MINIMUM_EVENT'
@@ -386,6 +421,8 @@ static const struct hal_ipc_handler ev_handlers[] = {
 				sizeof(struct hal_ev_dut_mode_receive) },
 	/* HAL_EV_LE_TEST_MODE */
 	{ handle_le_test_mode, false, sizeof(struct hal_ev_le_test_mode) },
+	/* HAL_EV_ENERGY_INFO */
+	{ handle_energy_info, false, sizeof(struct hal_ev_energy_info) },
 };
 
 static uint8_t get_mode(void)
@@ -438,6 +475,31 @@ static int send_configuration(void)
 		cmd->num++;
 	}
 
+	if (get_config("serialno", prop, "ro.serialno") > 0) {
+		len += add_prop(prop, HAL_CONFIG_SERIAL_NUMBER, buf + len);
+		cmd->num++;
+	}
+
+	if (get_config("systemid", prop, NULL) > 0) {
+		len += add_prop(prop, HAL_CONFIG_SYSTEM_ID, buf + len);
+		cmd->num++;
+	}
+
+	if (get_config("pnpid", prop, NULL) > 0) {
+		len += add_prop(prop, HAL_CONFIG_PNP_ID, buf + len);
+		cmd->num++;
+	}
+
+	if (get_config("fwrev", prop, "ro.build.version.release") > 0) {
+		len += add_prop(prop, HAL_CONFIG_FW_REV, buf + len);
+		cmd->num++;
+	}
+
+	if (get_config("hwrev", prop, "ro.board.platform") > 0) {
+		len += add_prop(prop, HAL_CONFIG_HW_REV, buf + len);
+		cmd->num++;
+	}
+
 	return hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_CONFIGURATION, len, cmd,
 							NULL, NULL, NULL);
 }
@@ -482,6 +544,7 @@ static int init(bt_callbacks_t *callbacks)
 
 	cmd.service_id = HAL_SERVICE_ID_BLUETOOTH;
 	cmd.mode = get_mode();
+	cmd.max_clients = 1;
 
 	status = hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
 					sizeof(cmd), &cmd, NULL, NULL, NULL);
@@ -491,7 +554,13 @@ static int init(bt_callbacks_t *callbacks)
 	}
 
 	cmd.service_id = HAL_SERVICE_ID_SOCKET;
+	cmd.max_clients = 1;
+
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	cmd.mode = HAL_MODE_SOCKET_DYNAMIC_MAP;
+#else
 	cmd.mode = HAL_MODE_DEFAULT;
+#endif
 
 	status = hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
 					sizeof(cmd), &cmd, NULL, NULL, NULL);
@@ -542,9 +611,9 @@ static void cleanup(void)
 
 	hal_ipc_cleanup();
 
-	bt_hal_cbacks = NULL;
-
 	hal_ipc_unregister(HAL_SERVICE_ID_BLUETOOTH);
+
+	bt_hal_cbacks = NULL;
 }
 
 static int get_adapter_properties(void)
@@ -711,7 +780,7 @@ static int cancel_discovery(void)
 						NULL, NULL, NULL, NULL);
 }
 
-static int create_bond(const bt_bdaddr_t *bd_addr)
+static int create_bond_real(const bt_bdaddr_t *bd_addr, int transport)
 {
 	struct hal_cmd_create_bond cmd;
 
@@ -720,11 +789,25 @@ static int create_bond(const bt_bdaddr_t *bd_addr)
 	if (!interface_ready())
 		return BT_STATUS_NOT_READY;
 
+	cmd.transport = transport;
+
 	memcpy(cmd.bdaddr, bd_addr, sizeof(cmd.bdaddr));
 
 	return hal_ipc_cmd(HAL_SERVICE_ID_BLUETOOTH, HAL_OP_CREATE_BOND,
 					sizeof(cmd), &cmd, NULL, NULL, NULL);
 }
+
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+static int create_bond(const bt_bdaddr_t *bd_addr, int transport)
+{
+	return create_bond_real(bd_addr, transport);
+}
+#else
+static int create_bond(const bt_bdaddr_t *bd_addr)
+{
+	return create_bond_real(bd_addr, BT_TRANSPORT_UNKNOWN);
+}
+#endif
 
 static int cancel_bond(const bt_bdaddr_t *bd_addr)
 {
@@ -826,9 +909,18 @@ static const void *get_profile_interface(const char *profile_id)
 	if (!strcmp(profile_id, BT_PROFILE_HEALTH_ID))
 		return bt_get_health_interface();
 
-#if BLUEZ_EXTENSIONS
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	if (!strcmp(profile_id, BT_PROFILE_AV_RC_CTRL_ID))
+		return bt_get_avrcp_ctrl_interface();
+
 	if (!strcmp(profile_id, BT_PROFILE_HANDSFREE_CLIENT_ID))
 		return bt_get_hf_client_interface();
+
+	if (!strcmp(profile_id, BT_PROFILE_MAP_CLIENT_ID))
+		return bt_get_map_client_interface();
+
+	if (!strcmp(profile_id, BT_PROFILE_ADVANCED_AUDIO_SINK_ID))
+		return bt_get_a2dp_sink_interface();
 #endif
 
 	return NULL;
@@ -907,6 +999,52 @@ static int config_hci_snoop_log(uint8_t enable)
 	return BT_STATUS_SUCCESS;
 }
 
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+static int get_connection_state(const bt_bdaddr_t *bd_addr)
+{
+	struct hal_cmd_get_connection_state cmd;
+	struct hal_rsp_get_connection_state rsp;
+	size_t rsp_len = sizeof(rsp);
+	bt_status_t status;
+
+	DBG("bdaddr: %s", bdaddr2str(bd_addr));
+
+	if (!interface_ready())
+		return 0;
+
+	memcpy(cmd.bdaddr, bd_addr, sizeof(cmd.bdaddr));
+
+	status = hal_ipc_cmd(HAL_SERVICE_ID_BLUETOOTH,
+			HAL_OP_GET_CONNECTION_STATE, sizeof(cmd), &cmd,
+			&rsp_len, &rsp, NULL);
+
+	if (status != BT_STATUS_SUCCESS)
+		return 0;
+
+	return rsp.connection_state;
+}
+
+static int set_os_callouts(bt_os_callouts_t *callouts)
+{
+	DBG("callouts: %p", callouts);
+
+	/* TODO: implement */
+
+	return BT_STATUS_SUCCESS;
+}
+
+static int read_energy_info(void)
+{
+	DBG("");
+
+	if (!interface_ready())
+		return BT_STATUS_NOT_READY;
+
+	return hal_ipc_cmd(HAL_SERVICE_ID_BLUETOOTH, HAL_OP_READ_ENERGY_INFO, 0,
+							NULL, NULL, NULL, NULL);
+}
+#endif
+
 static const bt_interface_t bluetooth_if = {
 	.size = sizeof(bt_interface_t),
 	.init = init,
@@ -933,6 +1071,11 @@ static const bt_interface_t bluetooth_if = {
 	.dut_mode_send = dut_mode_send,
 	.le_test_mode = le_test_mode,
 	.config_hci_snoop_log = config_hci_snoop_log,
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	.get_connection_state = get_connection_state,
+	.set_os_callouts = set_os_callouts,
+	.read_energy_info = read_energy_info,
+#endif
 };
 
 static const bt_interface_t *get_bluetooth_interface(void)

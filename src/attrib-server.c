@@ -372,6 +372,18 @@ static struct attribute *attrib_db_add_new(struct gatt_server *server,
 	return a;
 }
 
+static bool g_attrib_is_encrypted(GAttrib *attrib)
+{
+	BtIOSecLevel sec_level;
+	GIOChannel *io = g_attrib_get_channel(attrib);
+
+	if (!bt_io_get(io, NULL, BT_IO_OPT_SEC_LEVEL, &sec_level,
+							     BT_IO_OPT_INVALID))
+		return FALSE;
+
+	return sec_level > BT_IO_SEC_LOW;
+}
+
 static uint8_t att_check_reqs(struct gatt_channel *channel, uint8_t opcode,
 								int reqs)
 {
@@ -1211,43 +1223,32 @@ guint attrib_channel_attach(GAttrib *attrib)
 	return channel->id;
 }
 
-static int channel_id_cmp(gconstpointer data, gconstpointer user_data)
+static struct gatt_channel *find_channel(guint id)
 {
-	const struct gatt_channel *channel = data;
-	guint id = GPOINTER_TO_UINT(user_data);
+	GSList *l;
 
-	return channel->id - id;
+	for (l = servers; l; l = g_slist_next(l)) {
+		struct gatt_server *server = l->data;
+		GSList *c;
+
+		for (c = server->clients; c; c = g_slist_next(c)) {
+			struct gatt_channel *channel = c->data;
+
+			if (channel->id == id)
+				return channel;
+		}
+	}
+
+	return NULL;
 }
 
 gboolean attrib_channel_detach(GAttrib *attrib, guint id)
 {
-	struct gatt_server *server;
 	struct gatt_channel *channel;
-	GError *gerr = NULL;
-	GIOChannel *io;
-	bdaddr_t src;
-	GSList *l;
 
-	io = g_attrib_get_channel(attrib);
-
-	bt_io_get(io, &gerr, BT_IO_OPT_SOURCE_BDADDR, &src, BT_IO_OPT_INVALID);
-
-	if (gerr != NULL) {
-		error("bt_io_get: %s", gerr->message);
-		g_error_free(gerr);
+	channel = find_channel(id);
+	if (channel == NULL)
 		return FALSE;
-	}
-
-	server = find_gatt_server(&src);
-	if (server == NULL)
-		return FALSE;
-
-	l = g_slist_find_custom(server->clients, GUINT_TO_POINTER(id),
-								channel_id_cmp);
-	if (!l)
-		return FALSE;
-
-	channel = l->data;
 
 	g_attrib_unregister(channel->attrib, channel->id);
 	channel_remove(channel);
@@ -1288,7 +1289,7 @@ static void connect_event(GIOChannel *io, GError *gerr, void *user_data)
 	if (!device)
 		return;
 
-	device_attach_attrib(device, io);
+	device_attach_att(device, io);
 }
 
 static gboolean register_core_services(struct gatt_server *server)

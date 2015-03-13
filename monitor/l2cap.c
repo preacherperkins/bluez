@@ -42,6 +42,49 @@
 #include "keys.h"
 #include "sdp.h"
 #include "avctp.h"
+#include "rfcomm.h"
+
+/* L2CAP Control Field bit masks */
+#define L2CAP_CTRL_SAR_MASK		0xC000
+#define L2CAP_CTRL_REQSEQ_MASK		0x3F00
+#define L2CAP_CTRL_TXSEQ_MASK		0x007E
+#define L2CAP_CTRL_SUPERVISE_MASK	0x000C
+
+#define L2CAP_CTRL_RETRANS		0x0080
+#define L2CAP_CTRL_FINAL		0x0080
+#define L2CAP_CTRL_POLL			0x0010
+#define L2CAP_CTRL_FRAME_TYPE		0x0001 /* I- or S-Frame */
+
+#define L2CAP_CTRL_TXSEQ_SHIFT		1
+#define L2CAP_CTRL_SUPER_SHIFT		2
+#define L2CAP_CTRL_REQSEQ_SHIFT		8
+#define L2CAP_CTRL_SAR_SHIFT		14
+
+#define L2CAP_EXT_CTRL_TXSEQ_MASK	0xFFFC0000
+#define L2CAP_EXT_CTRL_SAR_MASK		0x00030000
+#define L2CAP_EXT_CTRL_SUPERVISE_MASK	0x00030000
+#define L2CAP_EXT_CTRL_REQSEQ_MASK	0x0000FFFC
+
+#define L2CAP_EXT_CTRL_POLL		0x00040000
+#define L2CAP_EXT_CTRL_FINAL		0x00000002
+#define L2CAP_EXT_CTRL_FRAME_TYPE	0x00000001 /* I- or S-Frame */
+
+#define L2CAP_EXT_CTRL_REQSEQ_SHIFT	2
+#define L2CAP_EXT_CTRL_SAR_SHIFT	16
+#define L2CAP_EXT_CTRL_SUPER_SHIFT	16
+#define L2CAP_EXT_CTRL_TXSEQ_SHIFT	18
+
+/* L2CAP Supervisory Function */
+#define L2CAP_SUPER_RR		0x00
+#define L2CAP_SUPER_REJ		0x01
+#define L2CAP_SUPER_RNR		0x02
+#define L2CAP_SUPER_SREJ	0x03
+
+/* L2CAP Segmentation and Reassembly */
+#define L2CAP_SAR_UNSEGMENTED	0x00
+#define L2CAP_SAR_START		0x01
+#define L2CAP_SAR_END		0x02
+#define L2CAP_SAR_CONTINUE	0x03
 
 #define MAX_CHAN 64
 
@@ -53,6 +96,7 @@ struct chan_data {
 	uint16_t psm;
 	uint8_t  ctrlid;
 	uint8_t  mode;
+	uint8_t  ext_ctrl;
 };
 
 static struct chan_data chan_list[MAX_CHAN];
@@ -254,6 +298,160 @@ static uint16_t get_chan(const struct l2cap_frame *frame)
 	return 0;
 }
 
+static void assign_ext_ctrl(const struct l2cap_frame *frame,
+					uint8_t ext_ctrl, uint16_t dcid)
+{
+	int i;
+
+	for (i = 0; i < MAX_CHAN; i++) {
+		if (chan_list[i].index != frame->index)
+			continue;
+
+		if (chan_list[i].handle != frame->handle)
+			continue;
+
+		if (frame->in) {
+			if (chan_list[i].scid == dcid) {
+				chan_list[i].ext_ctrl = ext_ctrl;
+				break;
+			}
+		} else {
+			if (chan_list[i].dcid == dcid) {
+				chan_list[i].ext_ctrl = ext_ctrl;
+				break;
+			}
+		}
+	}
+}
+
+static uint8_t get_ext_ctrl(const struct l2cap_frame *frame)
+{
+	int i;
+
+	for (i = 0; i < MAX_CHAN; i++) {
+		if (chan_list[i].index != frame->index &&
+						chan_list[i].ctrlid == 0)
+			continue;
+
+		if (chan_list[i].handle != frame->handle &&
+					chan_list[i].ctrlid != frame->index)
+			continue;
+
+		if (frame->in) {
+			if (chan_list[i].scid == frame->cid)
+				return chan_list[i].ext_ctrl;
+		} else {
+			if (chan_list[i].dcid == frame->cid)
+				return chan_list[i].ext_ctrl;
+		}
+	}
+
+	return 0;
+}
+
+static char *sar2str(uint8_t sar)
+{
+	switch (sar) {
+	case L2CAP_SAR_UNSEGMENTED:
+		return "Unsegmented";
+	case L2CAP_SAR_START:
+		return "Start";
+	case L2CAP_SAR_END:
+		return "End";
+	case L2CAP_SAR_CONTINUE:
+		return "Continuation";
+	default:
+		return "Bad SAR";
+	}
+}
+
+static char *supervisory2str(uint8_t supervisory)
+{
+	switch (supervisory) {
+	case L2CAP_SUPER_RR:
+		return "Receiver Ready (RR)";
+	case L2CAP_SUPER_REJ:
+		return "Reject (REJ)";
+	case L2CAP_SUPER_RNR:
+		return "Receiver Not Ready (RNR)";
+	case L2CAP_SUPER_SREJ:
+		return "Select Reject (SREJ)";
+	default:
+		return "Bad Supervisory";
+	}
+}
+
+static void l2cap_ctrl_ext_parse(struct l2cap_frame *frame, uint32_t ctrl)
+{
+	printf("      %s:",
+		ctrl & L2CAP_EXT_CTRL_FRAME_TYPE ? "S-frame" : "I-frame");
+
+	if (ctrl & L2CAP_EXT_CTRL_FRAME_TYPE) {
+		printf(" %s",
+		supervisory2str((ctrl & L2CAP_EXT_CTRL_SUPERVISE_MASK) >>
+						L2CAP_EXT_CTRL_SUPER_SHIFT));
+
+		if (ctrl & L2CAP_EXT_CTRL_POLL)
+			printf(" P-bit");
+	} else {
+		uint8_t sar = (ctrl & L2CAP_EXT_CTRL_SAR_MASK) >>
+						L2CAP_EXT_CTRL_SAR_SHIFT;
+		printf(" %s", sar2str(sar));
+		if (sar == L2CAP_SAR_START) {
+			uint16_t len;
+
+			if (!l2cap_frame_get_le16(frame, &len))
+				return;
+
+			printf(" (len %d)", len);
+		}
+		printf(" TxSeq %d", (ctrl & L2CAP_EXT_CTRL_TXSEQ_MASK) >>
+						L2CAP_EXT_CTRL_TXSEQ_SHIFT);
+	}
+
+	printf(" ReqSeq %d", (ctrl & L2CAP_EXT_CTRL_REQSEQ_MASK) >>
+						L2CAP_EXT_CTRL_REQSEQ_SHIFT);
+
+	if (ctrl & L2CAP_EXT_CTRL_FINAL)
+		printf(" F-bit");
+}
+
+static void l2cap_ctrl_parse(struct l2cap_frame *frame, uint32_t ctrl)
+{
+	printf("      %s:",
+			ctrl & L2CAP_CTRL_FRAME_TYPE ? "S-frame" : "I-frame");
+
+	if (ctrl & 0x01) {
+		printf(" %s",
+			supervisory2str((ctrl & L2CAP_CTRL_SUPERVISE_MASK) >>
+						L2CAP_CTRL_SUPER_SHIFT));
+
+		if (ctrl & L2CAP_CTRL_POLL)
+			printf(" P-bit");
+	} else {
+		uint8_t sar;
+
+		sar = (ctrl & L2CAP_CTRL_SAR_MASK) >> L2CAP_CTRL_SAR_SHIFT;
+		printf(" %s", sar2str(sar));
+		if (sar == L2CAP_SAR_START) {
+			uint16_t len;
+
+			if (!l2cap_frame_get_le16(frame, &len))
+				return;
+
+			printf(" (len %d)", len);
+		}
+		printf(" TxSeq %d", (ctrl & L2CAP_CTRL_TXSEQ_MASK) >>
+						L2CAP_CTRL_TXSEQ_SHIFT);
+	}
+
+	printf(" ReqSeq %d", (ctrl & L2CAP_CTRL_REQSEQ_MASK) >>
+						L2CAP_CTRL_REQSEQ_SHIFT);
+
+	if (ctrl & L2CAP_CTRL_FINAL)
+		printf(" F-bit");
+}
+
 #define MAX_INDEX 16
 
 struct index_data {
@@ -420,7 +618,7 @@ static struct {
 };
 
 static void print_config_options(const struct l2cap_frame *frame,
-				uint8_t offset, uint16_t dcid, bool response)
+				uint8_t offset, uint16_t cid, bool response)
 {
 	const uint8_t *data = frame->data + offset;
 	uint16_t size = frame->size - offset;
@@ -495,7 +693,7 @@ static void print_config_options(const struct l2cap_frame *frame,
                         break;
 		case 0x04:
 			if (response)
-				assign_mode(frame, data[consumed + 2], dcid);
+				assign_mode(frame, data[consumed + 2], cid);
 
 			switch (data[consumed + 2]) {
 			case 0x00:
@@ -572,8 +770,9 @@ static void print_config_options(const struct l2cap_frame *frame,
 					get_le32(data + consumed + 14));
 			break;
 		case 0x07:
-			print_field("  Max window size: %d",
+			print_field("  Extended window size: %d",
 					get_le16(data + consumed + 2));
+			assign_ext_ctrl(frame, 1, cid);
 			break;
 		default:
 			packet_hexdump(data + consumed + 2, len);
@@ -674,7 +873,8 @@ static struct {
 	{ 0x0003, "AMP Manager Protocol"	},
 	{ 0x0004, "Attribute Protocol"		},
 	{ 0x0005, "L2CAP Signaling (LE)"	},
-	{ 0x0006, "Security Manager"		},
+	{ 0x0006, "Security Manager (LE)"	},
+	{ 0x0007, "Security Manager (BR/EDR)"	},
 	{ 0x003f, "AMP Test Manager"		},
 	{ }
 };
@@ -2342,27 +2542,42 @@ static void print_smp_oob_data(uint8_t oob_data)
 
 static void print_smp_auth_req(uint8_t auth_req)
 {
-	const char *str;
+	const char *bond, *mitm, *sc, *kp;
 
 	switch (auth_req & 0x03) {
 	case 0x00:
-		str = "No bonding";
+		bond = "No bonding";
 		break;
 	case 0x01:
-		str = "Bonding";
+		bond = "Bonding";
 		break;
 	default:
-		str = "Reserved";
+		bond = "Reserved";
 		break;
 	}
 
-	print_field("Authentication requirement: %s - %s (0x%2.2x)",
-			str, (auth_req & 0x04) ? "MITM" : "No MITM", auth_req);
+	if ((auth_req & 0x04))
+		mitm = "MITM";
+	else
+		mitm = "No MITM";
+
+	if ((auth_req & 0x08))
+		sc = "SC";
+	else
+		sc = "Legacy";
+
+	if ((auth_req & 0x10))
+		kp = "Keypresses";
+	else
+		kp = "No Keypresses";
+
+	print_field("Authentication requirement: %s, %s, %s, %s (0x%2.2x)",
+						bond, mitm, sc, kp, auth_req);
 }
 
 static void print_smp_key_dist(const char *label, uint8_t dist)
 {
-	char str[19];
+	char str[27];
 
 	if (!(dist & 0x07)) {
 		strcpy(str, "<none> ");
@@ -2374,6 +2589,8 @@ static void print_smp_key_dist(const char *label, uint8_t dist)
 			strcat(str, "IdKey ");
 		if (dist & 0x04)
 			strcat(str, "Sign ");
+		if (dist & 0x08)
+			strcat(str, "LinkKey ");
 	}
 
 	print_field("%s: %s(0x%2.2x)", label, str, dist);
@@ -2455,6 +2672,18 @@ static void smp_pairing_failed(const struct l2cap_frame *frame)
 	case 0x0a:
 		str = "Invalid parameters";
 		break;
+	case 0x0b:
+		str = "DHKey check failed";
+		break;
+	case 0x0c:
+		str = "Numeric comparison failed";
+		break;
+	case 0x0d:
+		str = "BR/EDR pairing in progress";
+		break;
+	case 0x0e:
+		str = "Cross-transport Key Derivation/Generation not allowed";
+		break;
 	default:
 		str = "Reserved";
 		break;
@@ -2511,6 +2740,50 @@ static void smp_security_request(const struct l2cap_frame *frame)
 	print_smp_auth_req(pdu->auth_req);
 }
 
+static void smp_pairing_public_key(const struct l2cap_frame *frame)
+{
+	const struct bt_l2cap_smp_public_key *pdu = frame->data;
+
+	print_hex_field("X", pdu->x, 32);
+	print_hex_field("Y", pdu->y, 32);
+}
+
+static void smp_pairing_dhkey_check(const struct l2cap_frame *frame)
+{
+	const struct bt_l2cap_smp_dhkey_check *pdu = frame->data;
+
+	print_hex_field("E", pdu->e, 16);
+}
+
+static void smp_pairing_keypress_notification(const struct l2cap_frame *frame)
+{
+	const struct bt_l2cap_smp_keypress_notify *pdu = frame->data;
+	const char *str;
+
+	switch (pdu->type) {
+	case 0x00:
+		str = "Passkey entry started";
+		break;
+	case 0x01:
+		str = "Passkey digit entered";
+		break;
+	case 0x02:
+		str = "Passkey digit erased";
+		break;
+	case 0x03:
+		str = "Passkey cleared";
+		break;
+	case 0x04:
+		str = "Passkey entry completed";
+		break;
+	default:
+		str = "Reserved";
+		break;
+	}
+
+	print_field("Type: %s (0x%2.2x)", str, pdu->type);
+}
+
 struct smp_opcode_data {
 	uint8_t opcode;
 	const char *str;
@@ -2542,6 +2815,12 @@ static const struct smp_opcode_data smp_opcode_table[] = {
 			smp_signing_info, 16, true },
 	{ 0x0b, "Security Request",
 			smp_security_request, 1, true },
+	{ 0x0c, "Pairing Public Key",
+			smp_pairing_public_key, 64, true },
+	{ 0x0d, "Pairing DHKey Check",
+			smp_pairing_dhkey_check, 16, true },
+	{ 0x0e, "Pairing Keypress Notification",
+			smp_pairing_keypress_notification, 1, true },
 	{ }
 };
 
@@ -2581,8 +2860,9 @@ static void smp_packet(uint16_t index, bool in, uint16_t handle,
 		opcode_str = "Unknown";
 	}
 
-	print_indent(6, opcode_color, "SMP: ", opcode_str, COLOR_OFF,
-				" (0x%2.2x) len %d", opcode, size - 1);
+	print_indent(6, opcode_color, cid == 0x0006 ? "SMP: " : "BR/EDR SMP: ",
+				opcode_str, COLOR_OFF, " (0x%2.2x) len %d",
+				opcode, size - 1);
 
 	if (!opcode_data || !opcode_data->func) {
 		packet_hexdump(data + 1, size - 1);
@@ -2611,6 +2891,9 @@ static void l2cap_frame(uint16_t index, bool in, uint16_t handle,
 			uint16_t cid, const void *data, uint16_t size)
 {
 	struct l2cap_frame frame;
+	uint32_t ctrl32 = 0;
+	uint16_t ctrl16 = 0;
+	uint8_t ext_ctrl;
 
 	switch (cid) {
 	case 0x0001:
@@ -2629,19 +2912,55 @@ static void l2cap_frame(uint16_t index, bool in, uint16_t handle,
 		le_sig_packet(index, in, handle, cid, data, size);
 		break;
 	case 0x0006:
+	case 0x0007:
 		smp_packet(index, in, handle, cid, data, size);
 		break;
 	default:
 		l2cap_frame_init(&frame, index, in, handle, cid, data, size);
 
-		print_indent(6, COLOR_CYAN, "Channel:", "", COLOR_OFF,
-				" %d len %d [PSM %d mode %d] {chan %d}",
+		if (frame.mode > 0) {
+			ext_ctrl = get_ext_ctrl(&frame);
+
+			if (ext_ctrl) {
+				if (!l2cap_frame_get_le32(&frame, &ctrl32))
+					return;
+
+				print_indent(6, COLOR_CYAN, "Channel:", "",
+						COLOR_OFF, " %d len %d"
+						" ext_ctrl 0x%8.8x"
+						" [PSM %d mode %d] {chan %d}",
+						cid, size, ctrl32, frame.psm,
+						frame.mode, frame.chan);
+
+				l2cap_ctrl_ext_parse(&frame, ctrl32);
+			} else {
+				if (!l2cap_frame_get_le16(&frame, &ctrl16))
+					return;
+
+				print_indent(6, COLOR_CYAN, "Channel:", "",
+						COLOR_OFF, " %d len %d"
+						" ctrl 0x%4.4x"
+						" [PSM %d mode %d] {chan %d}",
+						cid, size, ctrl16, frame.psm,
+						frame.mode, frame.chan);
+
+				l2cap_ctrl_parse(&frame, ctrl16);
+			}
+
+			printf("\n");
+		} else {
+			print_indent(6, COLOR_CYAN, "Channel:", "", COLOR_OFF,
+					" %d len %d [PSM %d mode %d] {chan %d}",
 						cid, size, frame.psm,
 						frame.mode, frame.chan);
+		}
 
 		switch (frame.psm) {
 		case 0x0001:
 			sdp_packet(&frame);
+			break;
+		case 0x0003:
+			rfcomm_packet(&frame);
 			break;
 		case 0x001f:
 			att_packet(index, in, handle, cid, data, size);

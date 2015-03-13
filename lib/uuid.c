@@ -84,6 +84,7 @@ void bt_uuid_to_uuid128(const bt_uuid_t *src, bt_uuid_t *dst)
 	case BT_UUID16:
 		bt_uuid16_to_uuid128(src, dst);
 		break;
+	case BT_UUID_UNSPEC:
 	default:
 		break;
 	}
@@ -171,6 +172,7 @@ int bt_uuid_to_string(const bt_uuid_t *uuid, char *str, size_t n)
 				ntohl(data4), ntohs(data5));
 		}
 		break;
+	case BT_UUID_UNSPEC:
 	default:
 		snprintf(str, n, "Type of UUID (%x) unknown.", uuid->type);
 		return -EINVAL;	/* Enum type of UUID not set */
@@ -186,6 +188,19 @@ static inline int is_uuid128(const char *string)
 			string[13] == '-' &&
 			string[18] == '-' &&
 			string[23] == '-');
+}
+
+static inline int is_base_uuid128(const char *string)
+{
+	uint16_t uuid;
+	char dummy;
+
+	if (!is_uuid128(string))
+		return 0;
+
+	return sscanf(string,
+		"0000%04hx-0000-1000-8000-00805%1[fF]9%1[bB]34%1[fF]%1[bB]",
+		&uuid, &dummy, &dummy, &dummy, &dummy) == 5;
 }
 
 static inline int is_uuid32(const char *string)
@@ -204,7 +219,7 @@ static int bt_string_to_uuid16(bt_uuid_t *uuid, const char *string)
 	char *endptr = NULL;
 
 	u16 = strtol(string, &endptr, 16);
-	if (endptr && *endptr == '\0') {
+	if (endptr && (*endptr == '\0' || *endptr == '-')) {
 		bt_uuid16_create(uuid, u16);
 		return 0;
 	}
@@ -259,7 +274,9 @@ static int bt_string_to_uuid128(bt_uuid_t *uuid, const char *string)
 
 int bt_string_to_uuid(bt_uuid_t *uuid, const char *string)
 {
-	if (is_uuid128(string))
+	if (is_base_uuid128(string))
+		return bt_string_to_uuid16(uuid, string + 4);
+	else if (is_uuid128(string))
 		return bt_string_to_uuid128(uuid, string);
 	else if (is_uuid32(string))
 		return bt_string_to_uuid32(uuid, string);

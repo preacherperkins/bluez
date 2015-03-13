@@ -354,10 +354,11 @@ static bt_status_t init(bthf_client_callbacks_t *callbacks)
 				sizeof(ev_handlers)/sizeof(ev_handlers[0]));
 
 	cmd.service_id = HAL_SERVICE_ID_HANDSFREE_CLIENT;
+	cmd.mode = HAL_MODE_DEFAULT;
+	cmd.max_clients = 1;
 
 	ret = hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_REGISTER_MODULE,
 					sizeof(cmd), &cmd, NULL, NULL, NULL);
-
 	if (ret != BT_STATUS_SUCCESS) {
 		cbs = NULL;
 		hal_ipc_unregister(HAL_SERVICE_ID_HANDSFREE_CLIENT);
@@ -615,14 +616,14 @@ static void cleanup(void)
 	if (!interface_ready())
 		return;
 
-	cbs = NULL;
-
 	cmd.service_id = HAL_SERVICE_ID_HANDSFREE_CLIENT;
 
 	hal_ipc_cmd(HAL_SERVICE_ID_CORE, HAL_OP_UNREGISTER_MODULE,
 					sizeof(cmd), &cmd, NULL, NULL, NULL);
 
 	hal_ipc_unregister(HAL_SERVICE_ID_HANDSFREE_CLIENT);
+
+	cbs = NULL;
 }
 
 static bthf_client_interface_t iface = {

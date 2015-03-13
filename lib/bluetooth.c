@@ -370,7 +370,7 @@ const char *bt_compidtostr(int compid)
 	case 53:
 		return "Eclipse (HQ Espana) S.L.";
 	case 54:
-		return "Renesas Technology Corp.";
+		return "Renesas Electronics Corporation";
 	case 55:
 		return "Mobilian Corporation";
 	case 56:
@@ -882,7 +882,7 @@ const char *bt_compidtostr(int compid)
 	case 309:
 		return "Airewear LLC";
 	case 310:
-		return "ETC sp. z.o.o.";
+		return "Seed Labs, Inc. (formerly ETC sp. z.o.o.)";
 	case 311:
 		return "Prestigio Plaza Ltd.";
 	case 312:
@@ -1023,6 +1023,156 @@ const char *bt_compidtostr(int compid)
 		return "taskit GmbH";
 	case 380:
 		return "Daimler AG";
+	case 381:
+		return "BatAndCat";
+	case 382:
+		return "BluDotz Ltd";
+	case 383:
+		return "XTel ApS";
+	case 384:
+		return "Gigaset Communications GmbH";
+	case 385:
+		return "Gecko Health Innovations, Inc.";
+	case 386:
+		return "HOP Ubiquitous";
+	case 387:
+		return "To Be Assigned";
+	case 388:
+		return "Nectar";
+	case 389:
+		return "bel'apps LLC";
+	case 390:
+		return "CORE Lighting Ltd";
+	case 391:
+		return "Seraphim Sense Ltd";
+	case 392:
+		return "Unico RBC";
+	case 393:
+		return "Physical Enterprises Inc.";
+	case 394:
+		return "Able Trend Technology Limited";
+	case 395:
+		return "Konica Minolta, Inc.";
+	case 396:
+		return "Wilo SE";
+	case 397:
+		return "Extron Design Services";
+	case 398:
+		return "Fitbit, Inc.";
+	case 399:
+		return "Fireflies Systems";
+	case 400:
+		return "Intelletto Technologies Inc.";
+	case 401:
+		return "FDK CORPORATION";
+	case 402:
+		return "Cloudleaf, Inc";
+	case 403:
+		return "Maveric Automation LLC";
+	case 404:
+		return "Acoustic Stream Corporation";
+	case 405:
+		return "Zuli";
+	case 406:
+		return "Paxton Access Ltd";
+	case 407:
+		return "WiSilica Inc";
+	case 408:
+		return "Vengit Limited";
+	case 409:
+		return "SALTO SYSTEMS S.L.";
+	case 410:
+		return "T-Engine Forum";
+	case 411:
+		return "CUBETECH s.r.o.";
+	case 412:
+		return "Cokiya Incorporated";
+	case 413:
+		return "CVS Health";
+	case 414:
+		return "Ceruus";
+	case 415:
+		return "Strainstall Ltd";
+	case 416:
+		return "Channel Enterprises (HK) Ltd.";
+	case 417:
+		return "FIAMM";
+	case 418:
+		return "GIGALANE.CO.,LTD";
+	case 419:
+		return "EROAD";
+	case 420:
+		return "Mine Safety Appliances";
+	case 421:
+		return "Icon Health and Fitness";
+	case 422:
+		return "Asandoo GmbH";
+	case 423:
+		return "ENERGOUS CORPORATION";
+	case 424:
+		return "Taobao";
+	case 425:
+		return "Canon Inc.";
+	case 426:
+		return "Geophysical Technology Inc.";
+	case 427:
+		return "Facebook, Inc.";
+	case 428:
+		return "Nipro Diagnostics, Inc.";
+	case 429:
+		return "FlightSafety International";
+	case 430:
+		return "Earlens Corporation";
+	case 431:
+		return "Sunrise Micro Devices, Inc.";
+	case 432:
+		return "Star Micronics Co., Ltd.";
+	case 433:
+		return "Netizens Sp. z o.o.";
+	case 434:
+		return "Nymi Inc.";
+	case 435:
+		return "Nytec, Inc.";
+	case 436:
+		return "Trineo Sp. z o.o.";
+	case 437:
+		return "Nest Labs Inc.";
+	case 438:
+		return "LM Technologies Ltd";
+	case 439:
+		return "General Electric Company";
+	case 440:
+		return "i+D3 S.L.";
+	case 441:
+		return "HANA Micron";
+	case 442:
+		return "Stages Cycling LLC";
+	case 443:
+		return "Cochlear Bone Anchored Solutions AB";
+	case 444:
+		return "SenionLab AB";
+	case 445:
+		return "Syszone Co., Ltd";
+	case 446:
+		return "Pulsate Mobile Ltd.";
+	case 447:
+		return "Hong Kong HunterSun Electronic Limited";
+	case 448:
+		return "pironex GmbH";
+	case 449:
+		return "BRADATECH Corp.";
+	case 450:
+		return "Transenergooil AG";
+	case 451:
+		return "Bunch";
+	case 452:
+		return "DME Microelectronics";
+	case 453:
+		return "Bitcraze AB";
+	case 454:
+		return "HASWARE Inc.";
+	case 455:
+		return "Abiogenix Inc.";
 	case 65535:
 		return "internal use";
 	default:

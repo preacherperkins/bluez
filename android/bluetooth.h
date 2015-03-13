@@ -42,7 +42,7 @@ void bt_adapter_remove_record(uint32_t handle);
 
 typedef void (*bt_le_device_found)(const bdaddr_t *addr, uint8_t addr_type,
 					int rssi, uint16_t eir_len,
-					const void *eir, bool discoverable,
+					const void *eir, bool connectable,
 					bool bonded);
 bool bt_le_register(bt_le_device_found cb);
 void bt_le_unregister(void);
@@ -72,7 +72,8 @@ bool bt_read_device_rssi(const bdaddr_t *addr, bt_read_device_rssi_done cb,
 bool bt_get_csrk(const bdaddr_t *addr, enum bt_csrk_type type,
 					uint8_t key[16], uint32_t *sign_cnt);
 
-void bt_update_sign_counter(const bdaddr_t *addr, enum bt_csrk_type type);
+void bt_update_sign_counter(const bdaddr_t *addr, enum bt_csrk_type type,
+								uint32_t val);
 
 void bt_store_gatt_ccc(const bdaddr_t *addr, uint16_t value);
 
@@ -89,3 +90,8 @@ void bt_auto_connect_remove(const bdaddr_t *addr);
 typedef void (*bt_unpaired_device_cb)(const bdaddr_t *addr, uint8_t type);
 bool bt_unpaired_register(bt_unpaired_device_cb cb);
 void bt_unpaired_unregister(bt_unpaired_device_cb cb);
+
+typedef void (*bt_paired_device_cb)(const bdaddr_t *addr, uint8_t type);
+bool bt_paired_register(bt_paired_device_cb cb);
+void bt_paired_unregister(bt_paired_device_cb cb);
+bool bt_is_pairing(const bdaddr_t *addr);
