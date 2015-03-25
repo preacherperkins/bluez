@@ -242,6 +242,10 @@ void agent_unref(struct agent *agent)
 			passkey_cb = agent->request->cb;
 			passkey_cb(agent, &err, 0, agent->request->user_data);
 			break;
+		case AGENT_REQUEST_CONFIRMATION:
+		case AGENT_REQUEST_AUTHORIZATION:
+		case AGENT_REQUEST_AUTHORIZE_SERVICE:
+		case AGENT_REQUEST_DISPLAY_PINCODE:
 		default:
 			cb = agent->request->cb;
 			cb(agent, &err, agent->request->user_data);
@@ -350,6 +354,7 @@ static void simple_agent_reply(DBusPendingCall *call, void *user_data)
 
 		if (dbus_error_has_name(&err, DBUS_ERROR_NO_REPLY)) {
 			error("Timed out waiting for reply from agent");
+			agent_cancel(agent);
 			dbus_message_unref(message);
 			dbus_error_free(&err);
 			agent_unref(agent);

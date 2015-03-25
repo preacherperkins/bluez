@@ -37,8 +37,8 @@
 #include <syslog.h>
 #include <termios.h>
 #include <time.h>
+#include <poll.h>
 #include <sys/time.h>
-#include <sys/poll.h>
 #include <sys/param.h>
 #include <sys/ioctl.h>
 
@@ -128,7 +128,7 @@ int uart_speed(int s)
 		return B3500000;
 #endif
 #ifdef B3710000
-	case 3710000
+	case 3710000:
 		return B3710000;
 #endif
 #ifdef B4000000
@@ -329,7 +329,7 @@ static int intel(int fd, struct uart_t *u, struct termios *ti)
 
 static int bcm43xx(int fd, struct uart_t *u, struct termios *ti)
 {
-	return bcm43xx_init(fd, u->speed, ti, u->bdaddr);
+	return bcm43xx_init(fd, u->init_speed, u->speed, ti, u->bdaddr);
 }
 
 static int read_check(int fd, void *buf, int count)
@@ -1276,7 +1276,9 @@ static void usage(void)
 {
 	printf("hciattach - HCI UART driver initialization utility\n");
 	printf("Usage:\n");
-	printf("\thciattach [-n] [-p] [-b] [-r] [-t timeout] [-s initial_speed] <tty> <type | id> [speed] [flow|noflow] [bdaddr]\n");
+	printf("\thciattach [-n] [-p] [-b] [-r] [-t timeout] [-s initial_speed]"
+			" <tty> <type | id> [speed] [flow|noflow]"
+			" [sleep|nosleep] [bdaddr]\n");
 	printf("\thciattach -l\n");
 }
 

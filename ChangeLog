@@ -1,3 +1,50 @@
+ver 5.28:
+	Fix issue with GATT device discovery and probing.
+	Fix issue with bearer selection for dual-mode devices.
+	Fix issue with device removal while connected.
+	Fix issue with device name setting from inquiry response.
+	Fix issue with missing termination of name characteristic.
+	Fix issue with UTF-8 length handling for device name.
+	Fix issue with AVCTP key auto release handling.
+	Fix issue with AVCTP key press repetition handling.
+	Fix issue with payload sizes and GATT notifications.
+	Fix issue with memory corruption and GATT notifications.
+	Add support for HID proxy switching and CSR 8510 A10 devices.
+	Add support for Broadcom hex2hcd conversion utility.
+
+ver 5.27:
+	Fix issue with endian handling and management interface.
+	Fix issue with pending GATT operations when disconnecting.
+	Fix issue with 128-bit UUID conversions for HID over GATT.
+	Add support for Android 5.0 SELinux policies.
+
+ver 5.26:
+	Fix issue with handling A2DP XCASE connection state.
+	Fix issue with crash and A2DP configuration failures.
+	Fix issue with crash during OBEX session shutdown.
+	Add support for version 1.2 of Phonebook Access Profile.
+	Add support for HID over GATT get and set report handling.
+	Add support for Low Energy Secure Connections feature.
+	Add support for Bluetooth 4.2 commands and events.
+	Add support for Android 5.0 Bluetooth features.
+
+ver 5.25:
+	Fix issue with SCO connection after codec negotiation.
+	Fix issue with GATT and secondary service discovery.
+	Fix issue with GATT write descriptor callback.
+	Fix issue with MAP supported features bits.
+	Add support for MAP local time and timezone offset.
+	Add support for PBAP speed-dial and favorites folders.
+	Add support for PBAP speed-dial and identifier filters.
+	Add support for controller mode configuration option.
+	Add initial support for Android Lollipop features.
+
+ver 5.24:
+	Fix issue with storing of connection parameters.
+	Add support for Phonebook Access Profile 1.2 features.
+	Add support for Message Access Profile 1.2 event reports.
+	Add support for Android Bluetooth configuration options.
+
 ver 5.23:
 	Fix issue with concurrent authorization requests.
 	Fix issue with HID report identifier mismatch.

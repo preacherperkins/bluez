@@ -36,8 +36,11 @@ static const char BLUEZ_HAL_SK_PATH[] = "\0bluez_hal_socket";
 #define HAL_SERVICE_ID_AVRCP		8
 #define HAL_SERVICE_ID_GATT		9
 #define HAL_SERVICE_ID_HANDSFREE_CLIENT	10
+#define HAL_SERVICE_ID_MAP_CLIENT	11
+#define HAL_SERVICE_ID_AVRCP_CTRL	12
+#define HAL_SERVICE_ID_A2DP_SINK	13
 
-#define HAL_SERVICE_ID_MAX HAL_SERVICE_ID_HANDSFREE_CLIENT
+#define HAL_SERVICE_ID_MAX HAL_SERVICE_ID_A2DP_SINK
 
 /* Core Service */
 
@@ -63,6 +66,7 @@ static const char BLUEZ_HAL_SK_PATH[] = "\0bluez_hal_socket";
 struct hal_cmd_register_module {
 	uint8_t service_id;
 	uint8_t mode;
+	int32_t max_clients;
 } __attribute__((packed));
 
 #define HAL_OP_UNREGISTER_MODULE	0x02
@@ -73,6 +77,11 @@ struct hal_cmd_unregister_module {
 #define HAL_CONFIG_VENDOR		0x00
 #define HAL_CONFIG_MODEL		0x01
 #define HAL_CONFIG_NAME			0x02
+#define HAL_CONFIG_SERIAL_NUMBER	0x03
+#define HAL_CONFIG_SYSTEM_ID		0x04
+#define HAL_CONFIG_PNP_ID		0x05
+#define HAL_CONFIG_FW_REV		0x06
+#define HAL_CONFIG_HW_REV		0x07
 
 struct hal_config_prop {
 	uint8_t type;
@@ -133,6 +142,7 @@ struct hal_prop_device_info {
 	uint16_t manufacturer;
 } __attribute__((packed));
 
+#define HAL_PROP_ADAPTER_LOCAL_LE_FEAT		0x0d
 #define HAL_PROP_DEVICE_TIMESTAMP		0xFF
 
 #define HAL_ADAPTER_SCAN_MODE_NONE		0x00
@@ -184,9 +194,14 @@ struct hal_cmd_get_remote_services {
 
 #define HAL_OP_CANCEL_DISCOVERY		0x0c
 
+#define BT_TRANSPORT_UNKNOWN		0x00
+#define BT_TRANSPORT_BR_EDR		0x01
+#define BT_TRANSPORT_LE			0x02
+
 #define HAL_OP_CREATE_BOND		0x0d
 struct hal_cmd_create_bond {
 	uint8_t bdaddr[6];
+	uint8_t transport;
 } __attribute__((packed));
 
 #define HAL_OP_REMOVE_BOND		0x0e
@@ -239,7 +254,21 @@ struct hal_cmd_le_test_mode {
 	uint8_t  data[0];
 } __attribute__((packed));
 
+#define HAL_OP_GET_CONNECTION_STATE	0x15
+struct hal_cmd_get_connection_state {
+	uint8_t  bdaddr[6];
+} __attribute__((packed));
+
+struct hal_rsp_get_connection_state {
+	int32_t connection_state;
+} __attribute__((packed));
+
+#define HAL_OP_READ_ENERGY_INFO		0x16
+
 /* Bluetooth Socket HAL api */
+
+#define HAL_MODE_SOCKET_DEFAULT		HAL_MODE_DEFAULT
+#define HAL_MODE_SOCKET_DYNAMIC_MAP	0x01
 
 #define HAL_SOCK_RFCOMM		0x01
 #define HAL_SOCK_SCO		0x02
@@ -339,7 +368,7 @@ struct hal_cmd_hidhost_send_data {
 	uint8_t  data[0];
 } __attribute__((packed));
 
-/* a2dp HAL API */
+/* a2dp source and sink HAL API */
 
 #define HAL_OP_A2DP_CONNECT	0x01
 struct hal_cmd_a2dp_connect {
@@ -482,8 +511,14 @@ struct hal_cmd_handsfree_disconnect_audio {
 } __attribute__((packed));
 
 #define HAL_OP_HANDSFREE_START_VR		0x05
+struct hal_cmd_handsfree_start_vr {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_OP_HANDSFREE_STOP_VR		0x06
+struct hal_cmd_handsfree_stop_vr {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_HANDSFREE_VOLUME_TYPE_SPEAKER	0x00
 #define HAL_HANDSFREE_VOLUME_TYPE_MIC		0x01
@@ -492,6 +527,7 @@ struct hal_cmd_handsfree_disconnect_audio {
 struct hal_cmd_handsfree_volume_control {
 	uint8_t type;
 	uint8_t volume;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_HANDSFREE_NETWORK_STATE_NOT_AVAILABLE	0x00
@@ -511,6 +547,7 @@ struct hal_cmd_handsfree_device_status_notif {
 #define HAL_OP_HANDSFREE_COPS_RESPONSE		0x09
 struct hal_cmd_handsfree_cops_response {
 	uint16_t len;
+	uint8_t bdaddr[6];
 	uint8_t buf[0];
 } __attribute__((packed));
 
@@ -531,11 +568,13 @@ struct hal_cmd_handsfree_cind_response {
 	uint8_t signal;
 	uint8_t roam;
 	uint8_t batt_chg;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_OP_HANDSFREE_FORMATTED_AT_RESPONSE	0x0B
 struct hal_cmd_handsfree_formatted_at_response {
 	uint16_t len;
+	uint8_t bdaddr[6];
 	uint8_t buf[0];
 } __attribute__((packed));
 
@@ -546,6 +585,7 @@ struct hal_cmd_handsfree_formatted_at_response {
 struct hal_cmd_handsfree_at_response {
 	uint8_t response;
 	uint8_t error;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_HANDSFREE_CALL_DIRECTION_OUTGOING	0x00
@@ -569,6 +609,7 @@ struct hal_cmd_handsfree_clcc_response {
 	uint8_t mode;
 	uint8_t mpty;
 	uint8_t type;
+	uint8_t bdaddr[6];
 	uint16_t number_len;
 	uint8_t number[0];
 } __attribute__((packed));
@@ -583,7 +624,17 @@ struct hal_cmd_handsfree_phone_state_change {
 	uint8_t number[0];
 } __attribute__((packed));
 
-/* AVRCP HAL API */
+#define HAL_HANDSFREE_WBS_NONE			0x00
+#define HAL_HANDSFREE_WBS_NO			0x01
+#define HAL_HANDSFREE_WBS_YES			0x02
+
+#define HAL_OP_HANDSFREE_CONFIGURE_WBS		0x0F
+struct hal_cmd_handsfree_configure_wbs {
+	uint8_t bdaddr[6];
+	uint8_t config;
+} __attribute__((packed));
+
+/* AVRCP TARGET HAL API */
 
 #define HAL_AVRCP_PLAY_STATUS_STOPPED	0x00
 #define HAL_AVRCP_PLAY_STATUS_PLAYING	0x01
@@ -687,6 +738,15 @@ struct hal_cmd_avrcp_set_volume {
 	uint8_t value;
 } __attribute__((packed));
 
+/* AVRCP CTRL HAL API */
+
+#define HAL_OP_AVRCP_CTRL_SEND_PASSTHROUGH	0x01
+struct hal_cmd_avrcp_ctrl_send_passthrough {
+	uint8_t bdaddr[6];
+	uint8_t key_code;
+	uint8_t key_state;
+} __attribute__((packed));
+
 /* GATT HAL API */
 
 #define HAL_OP_GATT_CLIENT_REGISTER		0x01
@@ -710,6 +770,7 @@ struct hal_cmd_gatt_client_connect {
 	int32_t client_if;
 	uint8_t bdaddr[6];
 	uint8_t is_direct;
+	int32_t transport;
 } __attribute__((packed));
 
 #define HAL_OP_GATT_CLIENT_DISCONNECT		0x05
@@ -907,6 +968,7 @@ struct hal_cmd_gatt_server_connect {
 	int32_t server_if;
 	uint8_t bdaddr[6];
 	uint8_t is_direct;
+	int32_t transport;
 } __attribute__((packed));
 
 #define HAL_OP_GATT_SERVER_DISCONNECT		0x1a
@@ -947,9 +1009,8 @@ struct hal_cmd_gatt_server_add_descriptor {
 	int32_t permissions;
 } __attribute__((packed));
 
-#define GATT_SERVER_TRANSPORT_LE		0x00
-#define GATT_SERVER_TRANSPORT_BREDR		0x01
-#define GATT_SERVER_TRANSPORT_LE_BREDR		0x02
+#define GATT_SERVER_TRANSPORT_LE_BIT		0x01
+#define GATT_SERVER_TRANSPORT_BREDR_BIT		0x02
 
 #define HAL_OP_GATT_SERVER_START_SERVICE	0x1f
 struct hal_cmd_gatt_server_start_service {
@@ -990,6 +1051,141 @@ struct hal_cmd_gatt_server_send_response {
 	int32_t status;
 	uint16_t len;
 	uint8_t data[0];
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SCAN_FILTER_SETUP	0x024
+struct hal_cmd_gatt_client_scan_filter_setup {
+	int32_t client_if;
+	int32_t action;
+	int32_t filter_index;
+	int32_t features;
+	int32_t list_type;
+	int32_t filter_type;
+	int32_t rssi_hi;
+	int32_t rssi_lo;
+	int32_t delivery_mode;
+	int32_t found_timeout;
+	int32_t lost_timeout;
+	int32_t found_timeout_cnt;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SCAN_FILTER_ADD_REMOVE	0x025
+struct hal_cmd_gatt_client_scan_filter_add_remove {
+	int32_t client_if;
+	int32_t action;
+	int32_t filter_type;
+	int32_t filter_index;
+	int32_t company_id;
+	int32_t company_id_mask;
+	uint8_t uuid[16];
+	uint8_t uuid_mask[16];
+	uint8_t address[6];
+	uint8_t address_type;
+	int32_t data_len;
+	int32_t mask_len;
+	uint8_t data_mask[0]; /* common buffer for data and mask */
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SCAN_FILTER_CLEAR		0x26
+struct hal_cmd_gatt_client_scan_filter_clear {
+	int32_t client_if;
+	int32_t index;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SCAN_FILTER_ENABLE		0x27
+struct hal_cmd_gatt_client_scan_filter_enable {
+	int32_t client_if;
+	uint8_t enable;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_CONFIGURE_MTU		0x28
+struct hal_cmd_gatt_client_configure_mtu {
+	int32_t conn_id;
+	int32_t mtu;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_CONN_PARAM_UPDATE		0x29
+struct hal_cmd_gatt_client_conn_param_update {
+	uint8_t address[6];
+	int32_t min_interval;
+	int32_t max_interval;
+	int32_t latency;
+	int32_t timeout;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SET_SCAN_PARAM		0x2a
+struct hal_cmd_gatt_client_set_scan_param {
+	int32_t interval;
+	int32_t window;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SETUP_MULTI_ADV		0x2b
+struct hal_cmd_gatt_client_setup_multi_adv {
+	int32_t client_if;
+	int32_t min_interval;
+	int32_t max_interval;
+	int32_t type;
+	int32_t channel_map;
+	int32_t tx_power;
+	int32_t timeout;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_UPDATE_MULTI_ADV		0x2c
+struct hal_cmd_gatt_client_update_multi_adv {
+	int32_t client_if;
+	int32_t min_interval;
+	int32_t max_interval;
+	int32_t type;
+	int32_t channel_map;
+	int32_t tx_power;
+	int32_t timeout;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_SETUP_MULTI_ADV_INST		0x2d
+struct hal_cmd_gatt_client_setup_multi_adv_inst {
+	int32_t client_if;
+	uint8_t set_scan_rsp;
+	uint8_t include_name;
+	uint8_t include_tx_power;
+	int32_t appearance;
+	int32_t manufacturer_data_len;
+	int32_t service_data_len;
+	int32_t service_uuid_len;
+	uint8_t data_service_uuid[0];
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_DISABLE_MULTI_ADV_INST	0x2e
+struct hal_cmd_gatt_client_disable_multi_adv_inst {
+	int32_t client_if;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_CONFIGURE_BATCHSCAN		0x2f
+struct hal_cmd_gatt_client_configure_batchscan {
+	int32_t client_if;
+	int32_t full_max;
+	int32_t trunc_max;
+	int32_t notify_threshold;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_ENABLE_BATCHSCAN		0x30
+struct hal_cmd_gatt_client_enable_batchscan {
+	int32_t client_if;
+	int32_t mode;
+	int32_t interval;
+	int32_t window;
+	int32_t address_type;
+	int32_t discard_rule;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_DISABLE_BATCHSCAN		0x31
+struct hal_cmd_gatt_client_disable_batchscan {
+	int32_t client_if;
+} __attribute__((packed));
+
+#define HAL_OP_GATT_CLIENT_READ_BATCHSCAN_REPORTS	0x32
+struct hal_cmd_gatt_client_read_batchscan_reports {
+	int32_t client_if;
+	int32_t scan_mode;
 } __attribute__((packed));
 
 /* Handsfree client HAL API */
@@ -1048,12 +1244,12 @@ struct hal_cmd_hf_client_dial_memory {
 #define HAL_HF_CLIENT_ACTION_CHUP		0x08
 #define HAL_HF_CLIENT_ACTION_BRTH_0		0x09
 #define HAL_HF_CLIENT_ACTION_BRTH_1		0x0a
-#define HAL_HF_CLIENT_ACTION_BRTH_02		0x0b
+#define HAL_HF_CLIENT_ACTION_BRTH_2		0x0b
 
 #define HAL_OP_HF_CLIENT_CALL_ACTION		0x0a
 struct hal_cmd_hf_client_call_action {
 	uint8_t action;
-	uint8_t index;
+	int32_t index;
 } __attribute__((packed));
 
 #define HAL_OP_HF_CLIENT_QUERY_CURRENT_CALLS	0x0b
@@ -1066,6 +1262,13 @@ struct hal_cmd_hf_client_send_dtmf {
 } __attribute__((packed));
 
 #define HAL_OP_HF_CLIENT_GET_LAST_VOICE_TAG_NUM	0x0f
+
+/* MAP CLIENT HAL API */
+
+#define HAL_OP_MAP_CLIENT_GET_INSTANCES	0x01
+struct hal_cmd_map_client_get_instances {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 /* Notifications and confirmations */
 
@@ -1161,6 +1364,16 @@ struct hal_ev_le_test_mode {
 	uint16_t num_packets;
 } __attribute__((packed));
 
+#define HAL_EV_ENERGY_INFO		0x8c
+struct hal_ev_energy_info {
+	uint8_t status;
+	uint8_t ctrl_state;
+	uint64_t tx_time;
+	uint64_t rx_time;
+	uint64_t idle_time;
+	uint64_t energy_used;
+} __attribute__((packed));
+
 #define HAL_HIDHOST_STATE_CONNECTED		0x00
 #define HAL_HIDHOST_STATE_CONNECTING	0x01
 #define HAL_HIDHOST_STATE_DISCONNECTED	0x02
@@ -1175,8 +1388,22 @@ struct hal_ev_hidhost_conn_state {
 	uint8_t state;
 } __attribute__((packed));
 
-#define HAL_HIDHOST_STATUS_OK		0x00
-#define HAL_HIDHOST_GENERAL_ERROR	0x06
+#define HAL_HIDHOST_STATUS_OK			0x00
+
+#define HAL_HIDHOST_HS_NOT_READY		0x01
+#define HAL_HIDHOST_HS_INVALID_RAPORT_ID	0x02
+#define HAL_HIDHOST_HS_TRANS_NOT_SUPPORTED	0x03
+#define HAL_HIDHOST_HS_INVALID_PARAM		0x04
+#define HAL_HIDHOST_HS_ERROR			0x05
+
+#define HAL_HIDHOST_GENERAL_ERROR		0x06
+#define HAL_HIDHOST_SDP_ERROR			0x07
+#define HAL_HIDHOST_PROTOCOL_ERROR		0x08
+#define HAL_HIDHOST_DB_ERROR			0x09
+#define HAL_HIDHOST_TOD_UNSUPPORTED_ERROR	0x0a
+#define HAL_HIDHOST_NO_RESOURCES_ERROR		0x0b
+#define HAL_HIDHOST_AUTH_FAILED_ERROR		0x0c
+#define HAL_HIDHOST_HDL_ERROR			0x0d
 
 #define HAL_EV_HIDHOST_INFO			0x82
 struct hal_ev_hidhost_info {
@@ -1216,6 +1443,12 @@ struct hal_ev_hidhost_get_report {
 
 #define HAL_EV_HIDHOST_VIRTUAL_UNPLUG		0x86
 struct hal_ev_hidhost_virtual_unplug {
+	uint8_t  bdaddr[6];
+	uint8_t  status;
+} __attribute__((packed));
+
+#define HAL_EV_HIDHOST_HANDSHAKE		0x87
+struct hal_ev_hidhost_handshake {
 	uint8_t  bdaddr[6];
 	uint8_t  status;
 } __attribute__((packed));
@@ -1284,6 +1517,13 @@ struct hal_ev_a2dp_audio_state {
 	uint8_t bdaddr[6];
 } __attribute__((packed));
 
+#define HAL_EV_A2DP_AUDIO_CONFIG		0x83
+struct hal_ev_a2dp_audio_config {
+	uint8_t  bdaddr[6];
+	uint32_t sample_rate;
+	uint8_t  channel_count;
+} __attribute__((packed));
+
 #define HAL_EV_HANDSFREE_CONN_STATE_DISCONNECTED	0x00
 #define HAL_EV_HANDSFREE_CONN_STATE_CONNECTING		0x01
 #define HAL_EV_HANDSFREE_CONN_STATE_CONNECTED		0x02
@@ -1313,20 +1553,29 @@ struct hal_ev_handsfree_audio_state {
 #define HAL_EV_HANDSFREE_VR		0x83
 struct hal_ev_handsfree_vr_state {
 	uint8_t state;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_ANSWER		0x84
+struct hal_ev_handsfree_answer {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_HANGUP		0x85
+struct hal_ev_handsfree_hangup {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_VOLUME		0x86
 struct hal_ev_handsfree_volume {
 	uint8_t type;
 	uint8_t volume;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_DIAL		0x87
 struct hal_ev_handsfree_dial {
+	uint8_t bdaddr[6];
 	uint16_t number_len;
 	uint8_t number[0];
 } __attribute__((packed));
@@ -1334,6 +1583,7 @@ struct hal_ev_handsfree_dial {
 #define HAL_EV_HANDSFREE_DTMF		0x88
 struct hal_ev_handsfree_dtmf {
 	uint8_t tone;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_HANDSFREE_NREC_STOP		0x00
@@ -1342,6 +1592,7 @@ struct hal_ev_handsfree_dtmf {
 #define HAL_EV_HANDSFREE_NREC		0x89
 struct hal_ev_handsfree_nrec {
 	uint8_t nrec;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_HANDSFREE_CHLD_TYPE_RELEASEHELD			0x00
@@ -1352,23 +1603,40 @@ struct hal_ev_handsfree_nrec {
 #define HAL_EV_HANDSFREE_CHLD		0x8A
 struct hal_ev_handsfree_chld {
 	uint8_t chld;
+	uint8_t bdaddr[6];
 } __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_CNUM		0x8B
+struct hal_ev_handsfree_cnum {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_CIND		0x8C
+struct hal_ev_handsfree_cind {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_COPS		0x8D
+struct hal_ev_handsfree_cops {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_CLCC		0x8E
+struct hal_ev_handsfree_clcc {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_UNKNOWN_AT	0x8F
 struct hal_ev_handsfree_unknown_at {
+	uint8_t bdaddr[6];
 	uint16_t len;
 	uint8_t buf[0];
 } __attribute__((packed));
 
 #define HAL_EV_HANDSFREE_HSP_KEY_PRESS	0x90
+struct hal_ev_handsfree_hsp_key_press {
+	uint8_t bdaddr[6];
+} __attribute__((packed));
 
 #define HAL_AVRCP_FEATURE_NONE			0x00
 #define HAL_AVRCP_FEATURE_METADATA		0x01
@@ -1436,6 +1704,18 @@ struct hal_ev_avrcp_volume_changed {
 struct hal_ev_avrcp_passthrough_cmd {
 	uint8_t id;
 	uint8_t state;
+} __attribute__((packed));
+
+#define HAL_EV_AVRCP_CTRL_CONN_STATE		0x81
+struct hal_ev_avrcp_ctrl_conn_state {
+	uint8_t state;
+	uint8_t bdaddr[6];
+} __attribute__((packed));
+
+#define HAL_EV_AVRCP_CTRL_PASSTHROUGH_RSP	0x82
+struct hal_ev_avrcp_ctrl_passthrough_rsp {
+	uint8_t id;
+	uint8_t key_state;
 } __attribute__((packed));
 
 #define HAL_EV_GATT_CLIENT_REGISTER_CLIENT	0x81
@@ -1699,6 +1979,119 @@ struct hal_ev_gatt_server_rsp_confirmation {
 	int32_t handle;
 } __attribute__((packed));
 
+#define HAL_EV_GATT_CLIENT_CONFIGURE_MTU	0xa0
+struct hal_ev_gatt_client_configure_mtu {
+	int32_t conn_id;
+	int32_t status;
+	int32_t mtu;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_FILTER_CONFIG	0xa1
+struct hal_ev_gatt_client_filter_config {
+	int32_t action;
+	int32_t client_if;
+	int32_t status;
+	int32_t type;
+	int32_t space;
+}  __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_FILTER_PARAMS	0xa2
+struct hal_ev_gatt_client_filter_params {
+	int32_t action;
+	int32_t client_if;
+	int32_t status;
+	int32_t space;
+}  __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_FILTER_STATUS	0xa3
+struct hal_ev_gatt_client_filter_status {
+	int32_t enable;
+	int32_t client_if;
+	int32_t status;
+}  __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_MULTI_ADV_ENABLE	0xa4
+struct hal_ev_gatt_client_multi_adv_enable {
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+
+#define HAL_EV_GATT_CLIENT_MULTI_ADV_UPDATE	0xa5
+struct hal_ev_gatt_client_multi_adv_update {
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+
+#define HAL_EV_GATT_CLIENT_MULTI_ADV_DATA	0xa6
+struct hal_ev_gatt_client_multi_adv_data {
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+
+#define HAL_EV_GATT_CLIENT_MULTI_ADV_DISABLE	0xa7
+struct hal_ev_gatt_client_multi_adv_disable {
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_CONGESTION		0xa8
+struct hal_ev_gatt_client_congestion {
+	int32_t conn_id;
+	uint8_t congested;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_CONFIG_BATCHSCAN	0xa9
+struct hal_ev_gatt_client_config_batchscan {
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_ENABLE_BATCHSCAN	0xaa
+struct hal_ev_gatt_client_enable_batchscan {
+	int32_t action;
+	int32_t client_if;
+	int32_t status;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_BATCHSCAN_REPORTS	0xab
+struct hal_ev_gatt_client_batchscan_reports {
+	int32_t client_if;
+	int32_t status;
+	int32_t format;
+	int32_t num;
+	int32_t data_len;
+	uint8_t data[0];
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_BATCHSCAN_THRESHOLD	0xac
+struct hal_ev_gatt_client_batchscan_threshold {
+	int32_t client_if;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_CLIENT_TRACK_ADV		0xad
+struct hal_ev_gatt_client_track_adv {
+	int32_t client_if;
+	int32_t filetr_index;
+	int32_t address_type;
+	uint8_t address[6];
+	int32_t state;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_SERVER_INDICATION_SENT	0xae
+struct hal_ev_gatt_server_indication_sent {
+	int32_t conn_id;
+	int32_t status;
+} __attribute__((packed));
+
+#define HAL_EV_GATT_SERVER_CONGESTION		0xaf
+struct hal_ev_gatt_server_congestion {
+	int32_t conn_id;
+	uint8_t congested;
+} __attribute__((packed));
+
 #define HAL_GATT_PERMISSION_READ			0x0001
 #define HAL_GATT_PERMISSION_READ_ENCRYPTED		0x0002
 #define HAL_GATT_PERMISSION_READ_ENCRYPTED_MITM		0x0004
@@ -1844,7 +2237,7 @@ struct hal_ev_hf_client_call_waiting {
 } __attribute__((packed));
 
 #define HAL_HF_CLIENT_DIRECTION_OUTGOING	0x00
-#define HAL_HF_CLIENT_DIRECTION_INCOMIGN	0x01
+#define HAL_HF_CLIENT_DIRECTION_INCOMING	0x01
 
 #define HAL_HF_CLIENT_CALL_STATE_ACTIVE			0x00
 #define HAL_HF_CLIENT_CALL_STATE_HELD			0x01
@@ -1911,3 +2304,19 @@ struct hal_ev_hf_client_last_void_call_tag_num {
 } __attribute__((packed));
 
 #define HAL_EV_CLIENT_RING_INDICATION			0x95
+
+#define HAL_EV_MAP_CLIENT_REMOTE_MAS_INSTANCES	0x81
+struct hal_map_client_mas_instance {
+	int32_t id;
+	int32_t scn;
+	int32_t msg_types;
+	int32_t name_len;
+	uint8_t name[0];
+} __attribute__((packed));
+
+struct hal_ev_map_client_remote_mas_instances {
+	int8_t status;
+	uint8_t bdaddr[6];
+	int32_t num_instances;
+	struct hal_map_client_mas_instance instances[0];
+} __attribute__((packed));

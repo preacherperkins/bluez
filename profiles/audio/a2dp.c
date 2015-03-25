@@ -379,7 +379,7 @@ static void stream_state_changed(struct avdtp_stream *stream,
 static gboolean auto_config(gpointer data)
 {
 	struct a2dp_setup *setup = data;
-	struct btd_device *dev = avdtp_get_device(setup->session);
+	struct btd_device *dev = NULL;
 	struct btd_service *service;
 
 	/* Check if configuration was aborted */
@@ -388,6 +388,8 @@ static gboolean auto_config(gpointer data)
 
 	if (setup->err != NULL)
 		goto done;
+
+	dev = avdtp_get_device(setup->session);
 
 	avdtp_stream_add_cb(setup->session, setup->stream,
 				stream_state_changed, setup->sep);
@@ -1617,6 +1619,9 @@ unsigned int a2dp_config(struct avdtp *session, struct a2dp_sep *sep,
 			}
 		}
 		break;
+	case AVDTP_STATE_CONFIGURED:
+	case AVDTP_STATE_CLOSING:
+	case AVDTP_STATE_ABORTING:
 	default:
 		error("SEP in bad state for requesting a new stream");
 		goto failed;
@@ -1673,6 +1678,8 @@ unsigned int a2dp_resume(struct avdtp *session, struct a2dp_sep *sep,
 			cb_data->source_id = g_idle_add(finalize_resume,
 								setup);
 		break;
+	case AVDTP_STATE_CLOSING:
+	case AVDTP_STATE_ABORTING:
 	default:
 		error("SEP in bad state for resume");
 		goto failed;
@@ -1717,6 +1724,9 @@ unsigned int a2dp_suspend(struct avdtp *session, struct a2dp_sep *sep,
 		}
 		sep->suspending = TRUE;
 		break;
+	case AVDTP_STATE_CONFIGURED:
+	case AVDTP_STATE_CLOSING:
+	case AVDTP_STATE_ABORTING:
 	default:
 		error("SEP in bad state for suspend");
 		goto failed;
@@ -1804,6 +1814,10 @@ gboolean a2dp_sep_unlock(struct a2dp_sep *sep, struct avdtp *session)
 		if (avdtp_suspend(session, sep->stream) == 0)
 			sep->suspending = TRUE;
 		break;
+	case AVDTP_STATE_IDLE:
+	case AVDTP_STATE_CONFIGURED:
+	case AVDTP_STATE_CLOSING:
+	case AVDTP_STATE_ABORTING:
 	default:
 		break;
 	}

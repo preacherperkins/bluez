@@ -46,9 +46,11 @@ Methods		void Connect()
 			device. The UUID provided is the remote service
 			UUID for the profile.
 
-			Possible errors: org.bluez.Error.DoesNotExist
-					 org.bluez.Error.AlreadyConnected
-					 org.bluez.Error.ConnectFailed
+			Possible errors: org.bluez.Error.Failed
+					 org.bluez.Error.InProgress
+					 org.bluez.Error.InvalidArguments
+					 org.bluez.Error.NotAvailable
+					 org.bluez.Error.NotReady
 
 		void DisconnectProfile(string uuid)
 
@@ -60,9 +62,9 @@ Methods		void Connect()
 			as long as the profile is registered this will always
 			succeed.
 
-			Possible errors: org.bluez.Error.DoesNotExist
-					 org.bluez.Error.Failed
-					 org.bluez.Error.NotConnected
+			Possible errors: org.bluez.Error.Failed
+					 org.bluez.Error.InProgress
+					 org.bluez.Error.InvalidArguments
 					 org.bluez.Error.NotSupported
 
 		void Pair()

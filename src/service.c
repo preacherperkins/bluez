@@ -170,11 +170,30 @@ int service_probe(struct btd_service *service)
 
 void service_remove(struct btd_service *service)
 {
+	change_state(service, BTD_SERVICE_STATE_DISCONNECTED, -ECONNABORTED);
 	change_state(service, BTD_SERVICE_STATE_UNAVAILABLE, 0);
 	service->profile->device_remove(service);
 	service->device = NULL;
 	service->profile = NULL;
 	btd_service_unref(service);
+}
+
+int service_accept(struct btd_service *service)
+{
+	char addr[18];
+	int err;
+
+	if (!service->profile->accept)
+		return 0;
+
+	err = service->profile->accept(service);
+	if (!err)
+		return 0;
+
+	ba2str(device_get_address(service->device), addr);
+	error("%s profile accept failed for %s", service->profile->name, addr);
+
+	return err;
 }
 
 int btd_service_connect(struct btd_service *service)

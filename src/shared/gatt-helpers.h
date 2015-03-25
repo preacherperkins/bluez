@@ -38,6 +38,7 @@ struct bt_gatt_iter {
 unsigned int bt_gatt_result_service_count(struct bt_gatt_result *result);
 unsigned int bt_gatt_result_characteristic_count(struct bt_gatt_result *result);
 unsigned int bt_gatt_result_descriptor_count(struct bt_gatt_result *result);
+unsigned int bt_gatt_result_included_count(struct bt_gatt_result *result);
 
 bool bt_gatt_iter_init(struct bt_gatt_iter *iter, struct bt_gatt_result *result);
 bool bt_gatt_iter_next_service(struct bt_gatt_iter *iter,
@@ -49,6 +50,12 @@ bool bt_gatt_iter_next_characteristic(struct bt_gatt_iter *iter,
 				uint8_t uuid[16]);
 bool bt_gatt_iter_next_descriptor(struct bt_gatt_iter *iter, uint16_t *handle,
 							uint8_t uuid[16]);
+bool bt_gatt_iter_next_included_service(struct bt_gatt_iter *iter,
+				uint16_t *handle, uint16_t *start_handle,
+				uint16_t *end_handle, uint8_t uuid[16]);
+bool bt_gatt_iter_next_read_by_type(struct bt_gatt_iter *iter,
+				uint16_t *handle, uint16_t *length,
+				const uint8_t **value);
 
 typedef void (*bt_gatt_destroy_func_t)(void *user_data);
 
@@ -63,13 +70,22 @@ bool bt_gatt_exchange_mtu(struct bt_att *att, uint16_t client_rx_mtu,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy);
 
+bool bt_gatt_discover_all_primary_services(struct bt_att *att, bt_uuid_t *uuid,
+					bt_gatt_discovery_callback_t callback,
+					void *user_data,
+					bt_gatt_destroy_func_t destroy);
 bool bt_gatt_discover_primary_services(struct bt_att *att, bt_uuid_t *uuid,
+					uint16_t start, uint16_t end,
+					bt_gatt_discovery_callback_t callback,
+					void *user_data,
+					bt_gatt_destroy_func_t destroy);
+bool bt_gatt_discover_secondary_services(struct bt_att *att, bt_uuid_t *uuid,
+					uint16_t start, uint16_t end,
 					bt_gatt_discovery_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy);
 bool bt_gatt_discover_included_services(struct bt_att *att,
 					uint16_t start, uint16_t end,
-					bt_uuid_t *uuid,
 					bt_gatt_discovery_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy);
@@ -80,6 +96,12 @@ bool bt_gatt_discover_characteristics(struct bt_att *att,
 					bt_gatt_destroy_func_t destroy);
 bool bt_gatt_discover_descriptors(struct bt_att *att,
 					uint16_t start, uint16_t end,
+					bt_gatt_discovery_callback_t callback,
+					void *user_data,
+					bt_gatt_destroy_func_t destroy);
+
+bool bt_gatt_read_by_type(struct bt_att *att, uint16_t start, uint16_t end,
+					const bt_uuid_t *uuid,
 					bt_gatt_discovery_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy);
