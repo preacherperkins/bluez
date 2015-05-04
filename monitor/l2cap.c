@@ -31,7 +31,7 @@
 #include <string.h>
 #include <inttypes.h>
 
-#include <bluetooth/bluetooth.h>
+#include "lib/bluetooth.h"
 
 #include "src/shared/util.h"
 #include "bt.h"
@@ -91,6 +91,7 @@
 struct chan_data {
 	uint16_t index;
 	uint16_t handle;
+	uint8_t ident;
 	uint16_t scid;
 	uint16_t dcid;
 	uint16_t psm;
@@ -135,6 +136,7 @@ static void assign_scid(const struct l2cap_frame *frame,
 	memset(&chan_list[n], 0, sizeof(chan_list[n]));
 	chan_list[n].index = frame->index;
 	chan_list[n].handle = frame->handle;
+	chan_list[n].ident = frame->ident;
 
 	if (frame->in)
 		chan_list[n].dcid = scid;
@@ -171,8 +173,8 @@ static void release_scid(const struct l2cap_frame *frame, uint16_t scid)
 	}
 }
 
-static void assign_dcid(const struct l2cap_frame *frame,
-					uint16_t dcid, uint16_t scid)
+static void assign_dcid(const struct l2cap_frame *frame, uint16_t dcid,
+								uint16_t scid)
 {
 	int i;
 
@@ -183,15 +185,32 @@ static void assign_dcid(const struct l2cap_frame *frame,
 		if (chan_list[i].handle != frame->handle)
 			continue;
 
+		if (frame->ident != 0 && chan_list[i].ident != frame->ident)
+			continue;
+
 		if (frame->in) {
-			if (chan_list[i].scid == scid) {
-				chan_list[i].dcid = dcid;
-				break;
+			if (scid) {
+				if (chan_list[i].scid == scid) {
+					chan_list[i].dcid = dcid;
+					break;
+				}
+			} else {
+				if (chan_list[i].scid && !chan_list[i].dcid) {
+					chan_list[i].dcid = dcid;
+					break;
+				}
 			}
 		} else {
-			if (chan_list[i].dcid == scid) {
-				chan_list[i].scid = dcid;
-				break;
+			if (scid) {
+				if (chan_list[i].dcid == scid) {
+					chan_list[i].scid = dcid;
+					break;
+				}
+			} else {
+				if (chan_list[i].dcid && !chan_list[i].scid) {
+					chan_list[i].scid = dcid;
+					break;
+				}
 			}
 		}
 	}
@@ -223,7 +242,7 @@ static void assign_mode(const struct l2cap_frame *frame,
 	}
 }
 
-static uint16_t get_psm(const struct l2cap_frame *frame)
+static int get_chan_data_index(const struct l2cap_frame *frame)
 {
 	int i;
 
@@ -232,70 +251,53 @@ static uint16_t get_psm(const struct l2cap_frame *frame)
 					chan_list[i].ctrlid == 0)
 			continue;
 
-		if (chan_list[i].handle != frame->handle &&
+		if (chan_list[i].ctrlid != 0 &&
 					chan_list[i].ctrlid != frame->index)
+			continue;
+
+		if (chan_list[i].handle != frame->handle)
 			continue;
 
 		if (frame->in) {
 			if (chan_list[i].scid == frame->cid)
-				return chan_list[i].psm;
+				return i;
 		} else {
 			if (chan_list[i].dcid == frame->cid)
-				return chan_list[i].psm;
+				return i;
 		}
 	}
 
-	return 0;
+	return -1;
+}
+
+static uint16_t get_psm(const struct l2cap_frame *frame)
+{
+	int i = get_chan_data_index(frame);
+
+	if (i < 0)
+		return 0;
+
+	return chan_list[i].psm;
 }
 
 static uint8_t get_mode(const struct l2cap_frame *frame)
 {
-	int i;
+	int i = get_chan_data_index(frame);
 
-	for (i = 0; i < MAX_CHAN; i++) {
-		if (chan_list[i].index != frame->index &&
-					chan_list[i].ctrlid == 0)
-			continue;
+	if (i < 0)
+		return 0;
 
-		if (chan_list[i].handle != frame->handle &&
-					chan_list[i].ctrlid != frame->index)
-			continue;
-
-		if (frame->in) {
-			if (chan_list[i].scid == frame->cid)
-				return chan_list[i].mode;
-		} else {
-			if (chan_list[i].dcid == frame->cid)
-				return chan_list[i].mode;
-		}
-	}
-
-	return 0;
+	return chan_list[i].mode;
 }
 
 static uint16_t get_chan(const struct l2cap_frame *frame)
 {
-	int i;
+	int i = get_chan_data_index(frame);
 
-	for (i = 0; i < MAX_CHAN; i++) {
-		if (chan_list[i].index != frame->index &&
-					chan_list[i].ctrlid == 0)
-			continue;
+	if (i < 0)
+		return 0;
 
-		if (chan_list[i].handle != frame->handle &&
-					chan_list[i].ctrlid != frame->index)
-			continue;
-
-		if (frame->in) {
-			if (chan_list[i].scid == frame->cid)
-				return i;
-		} else {
-			if (chan_list[i].dcid == frame->cid)
-				return i;
-		}
-	}
-
-	return 0;
+	return i;
 }
 
 static void assign_ext_ctrl(const struct l2cap_frame *frame,
@@ -326,27 +328,12 @@ static void assign_ext_ctrl(const struct l2cap_frame *frame,
 
 static uint8_t get_ext_ctrl(const struct l2cap_frame *frame)
 {
-	int i;
+	int i = get_chan_data_index(frame);
 
-	for (i = 0; i < MAX_CHAN; i++) {
-		if (chan_list[i].index != frame->index &&
-						chan_list[i].ctrlid == 0)
-			continue;
+	if (i < 0)
+		return 0;
 
-		if (chan_list[i].handle != frame->handle &&
-					chan_list[i].ctrlid != frame->index)
-			continue;
-
-		if (frame->in) {
-			if (chan_list[i].scid == frame->cid)
-				return chan_list[i].ext_ctrl;
-		} else {
-			if (chan_list[i].dcid == frame->cid)
-				return chan_list[i].ext_ctrl;
-		}
-	}
-
-	return 0;
+	return chan_list[i].ext_ctrl;
 }
 
 static char *sar2str(uint8_t sar)
@@ -1236,7 +1223,7 @@ static void sig_le_conn_rsp(const struct l2cap_frame *frame)
 	print_field("Credits: %u", le16_to_cpu(pdu->credits));
 	print_conn_result(pdu->result);
 
-	/*assign_dcid(frame, le16_to_cpu(pdu->dcid), le16_to_cpu(pdu->scid));*/
+	assign_dcid(frame, le16_to_cpu(pdu->dcid), 0);
 }
 
 static void sig_le_flowctl_creds(const struct l2cap_frame *frame)
@@ -1313,13 +1300,14 @@ static const struct sig_opcode_data le_sig_opcode_table[] = {
 	{ },
 };
 
-static void l2cap_frame_init(struct l2cap_frame *frame,
-				uint16_t index, bool in, uint16_t handle,
+static void l2cap_frame_init(struct l2cap_frame *frame, uint16_t index, bool in,
+				uint16_t handle, uint8_t ident,
 				uint16_t cid, const void *data, uint16_t size)
 {
 	frame->index  = index;
 	frame->in     = in;
 	frame->handle = handle;
+	frame->ident  = ident;
 	frame->cid    = cid;
 	frame->data   = data;
 	frame->size   = size;
@@ -1408,7 +1396,8 @@ static void bredr_sig_packet(uint16_t index, bool in, uint16_t handle,
 			}
 		}
 
-		l2cap_frame_init(&frame, index, in, handle, cid, data, len);
+		l2cap_frame_init(&frame, index, in, handle, hdr->ident, cid,
+								data, len);
 		opcode_data->func(&frame);
 
 		data += len;
@@ -1489,7 +1478,7 @@ static void le_sig_packet(uint16_t index, bool in, uint16_t handle,
 		}
 	}
 
-	l2cap_frame_init(&frame, index, in, handle, cid, data, len);
+	l2cap_frame_init(&frame, index, in, handle, hdr->ident, cid, data, len);
 	opcode_data->func(&frame);
 }
 
@@ -1520,7 +1509,7 @@ static void connless_packet(uint16_t index, bool in, uint16_t handle,
 		break;
 	}
 
-	l2cap_frame_init(&frame, index, in, handle, cid, data, size);
+	l2cap_frame_init(&frame, index, in, handle, 0, cid, data, size);
 }
 
 static void print_controller_list(const uint8_t *data, uint16_t size)
@@ -1889,7 +1878,7 @@ static void amp_packet(uint16_t index, bool in, uint16_t handle,
 		}
 	}
 
-	l2cap_frame_init(&frame, index, in, handle, cid, data + 6, len);
+	l2cap_frame_init(&frame, index, in, handle, 0, cid, data + 6, len);
 	opcode_data->func(&frame);
 }
 
@@ -2432,7 +2421,7 @@ static void att_packet(uint16_t index, bool in, uint16_t handle,
 		}
 	}
 
-	l2cap_frame_init(&frame, index, in, handle, cid, data + 1, size - 1);
+	l2cap_frame_init(&frame, index, in, handle, 0, cid, data + 1, size - 1);
 	opcode_data->func(&frame);
 }
 
@@ -2883,7 +2872,7 @@ static void smp_packet(uint16_t index, bool in, uint16_t handle,
 		}
 	}
 
-	l2cap_frame_init(&frame, index, in, handle, cid, data + 1, size - 1);
+	l2cap_frame_init(&frame, index, in, handle, 0, cid, data + 1, size - 1);
 	opcode_data->func(&frame);
 }
 
@@ -2916,7 +2905,7 @@ static void l2cap_frame(uint16_t index, bool in, uint16_t handle,
 		smp_packet(index, in, handle, cid, data, size);
 		break;
 	default:
-		l2cap_frame_init(&frame, index, in, handle, cid, data, size);
+		l2cap_frame_init(&frame, index, in, handle, 0, cid, data, size);
 
 		if (frame.mode > 0) {
 			ext_ctrl = get_ext_ctrl(&frame);

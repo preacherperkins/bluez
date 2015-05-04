@@ -34,11 +34,11 @@
 #include <glib.h>
 #include <sys/stat.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/sdp.h>
-#include <bluetooth/sdp_lib.h>
-
+#include "lib/bluetooth.h"
+#include "lib/sdp.h"
+#include "lib/sdp_lib.h"
 #include "lib/uuid.h"
+
 #include "btio/btio.h"
 #include "log.h"
 #include "adapter.h"
@@ -97,15 +97,6 @@ static bt_uuid_t ccc_uuid = {
 			.type = BT_UUID16,
 			.value.u16 = GATT_CLIENT_CHARAC_CFG_UUID
 };
-
-static inline void put_uuid_le(const bt_uuid_t *src, void *dst)
-{
-	if (src->type == BT_UUID16)
-		put_le16(src->value.u16, dst);
-	else
-		/* Convert from 128-bit BE to LE */
-		bswap_128(&src->value.u128, dst);
-}
 
 static void attrib_free(void *data)
 {
@@ -697,7 +688,7 @@ static uint16_t find_info(struct gatt_channel *channel, uint16_t start,
 		put_le16(a->handle, value);
 
 		/* Attribute Value */
-		put_uuid_le(&a->uuid, &value[2]);
+		bt_uuid_to_le(&a->uuid, &value[2]);
 	}
 
 	length = enc_find_info_resp(format, adl, pdu, len);
@@ -856,7 +847,7 @@ static uint16_t read_blob(struct gatt_channel *channel, uint16_t handle,
 
 	a = l->data;
 
-	if (a->len <= offset)
+	if (a->len < offset)
 		return enc_error_resp(ATT_OP_READ_BLOB_REQ, handle,
 					ATT_ECODE_INVALID_OFFSET, pdu, len);
 

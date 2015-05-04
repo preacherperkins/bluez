@@ -32,14 +32,15 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
 
 #include "src/shared/util.h"
 #include "src/shared/crypto.h"
 #include "src/shared/ecc.h"
-#include "monitor/mainloop.h"
+#include "src/shared/mainloop.h"
 #include "monitor/bt.h"
 
 #include "phy.h"

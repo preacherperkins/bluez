@@ -28,6 +28,7 @@
 
 #include "src/shared/queue.h"
 #include "src/shared/att.h"
+#include "lib/bluetooth.h"
 #include "lib/uuid.h"
 #include "src/shared/gatt-helpers.h"
 #include "src/shared/util.h"
@@ -208,16 +209,17 @@ static bool convert_uuid_le(const uint8_t *src, size_t len, uint8_t dst[16])
 	return true;
 }
 
-struct discovery_op {
+struct bt_gatt_request {
 	struct bt_att *att;
 	unsigned int id;
+	uint16_t start_handle;
 	uint16_t end_handle;
 	int ref_count;
 	bt_uuid_t uuid;
 	uint16_t service_type;
 	struct bt_gatt_result *result_head;
 	struct bt_gatt_result *result_tail;
-	bt_gatt_discovery_callback_t callback;
+	bt_gatt_request_callback_t callback;
 	void *user_data;
 	bt_gatt_destroy_func_t destroy;
 };
@@ -225,7 +227,7 @@ struct discovery_op {
 static struct bt_gatt_result *result_append(uint8_t opcode, const void *pdu,
 						uint16_t pdu_len,
 						uint16_t data_len,
-						struct discovery_op *op)
+						struct bt_gatt_request *op)
 {
 	struct bt_gatt_result *result;
 
@@ -248,7 +250,7 @@ bool bt_gatt_iter_next_included_service(struct bt_gatt_iter *iter,
 				uint16_t *end_handle, uint8_t uuid[16])
 {
 	struct bt_gatt_result *read_result;
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	const void *pdu_ptr;
 	int i = 0;
 
@@ -327,7 +329,7 @@ bool bt_gatt_iter_next_service(struct bt_gatt_iter *iter,
 				uint16_t *start_handle, uint16_t *end_handle,
 				uint8_t uuid[16])
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	const void *pdu_ptr;
 	bt_uuid_t tmp;
 
@@ -369,7 +371,7 @@ bool bt_gatt_iter_next_characteristic(struct bt_gatt_iter *iter,
 				uint16_t *value_handle, uint8_t *properties,
 				uint8_t uuid[16])
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	const void *pdu_ptr;
 
 	if (!iter || !iter->result || !start_handle || !end_handle ||
@@ -445,7 +447,7 @@ bool bt_gatt_iter_next_read_by_type(struct bt_gatt_iter *iter,
 				uint16_t *handle, uint16_t *length,
 				const uint8_t **value)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	const void *pdu_ptr;
 
 	if (!iter || !iter->result || !handle || !length || !value)
@@ -534,13 +536,14 @@ done:
 		op->callback(success, att_ecode, op->user_data);
 }
 
-bool bt_gatt_exchange_mtu(struct bt_att *att, uint16_t client_rx_mtu,
+unsigned int bt_gatt_exchange_mtu(struct bt_att *att, uint16_t client_rx_mtu,
 					bt_gatt_result_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
 	struct mtu_op *op;
 	uint8_t pdu[2];
+	unsigned int id;
 
 	if (!att || !client_rx_mtu)
 		return false;
@@ -557,35 +560,12 @@ bool bt_gatt_exchange_mtu(struct bt_att *att, uint16_t client_rx_mtu,
 
 	put_le16(client_rx_mtu, pdu);
 
-	if (!bt_att_send(att, BT_ATT_OP_MTU_REQ, pdu, sizeof(pdu),
-							mtu_cb, op,
-							destroy_mtu_op)) {
+	id = bt_att_send(att, BT_ATT_OP_MTU_REQ, pdu, sizeof(pdu), mtu_cb, op,
+								destroy_mtu_op);
+	if (!id)
 		free(op);
-		return false;
-	}
 
-	return true;
-}
-
-static void put_uuid_le(const bt_uuid_t *src, void *dst)
-{
-	bt_uuid_t uuid;
-
-	switch (src->type) {
-	case BT_UUID16:
-		put_le16(src->value.u16, dst);
-		break;
-	case BT_UUID128:
-		bswap_128(&src->value.u128, dst);
-		break;
-	case BT_UUID32:
-		bt_uuid_to_uuid128(src, &uuid);
-		bswap_128(&uuid.value.u128, dst);
-		break;
-	case BT_UUID_UNSPEC:
-	default:
-		break;
-	}
+	return id;
 }
 
 static inline int get_uuid_len(const bt_uuid_t *uuid)
@@ -596,43 +576,75 @@ static inline int get_uuid_len(const bt_uuid_t *uuid)
 	return (uuid->type == BT_UUID16) ? 2 : 16;
 }
 
-static struct discovery_op* discovery_op_ref(struct discovery_op *op)
+struct bt_gatt_request *bt_gatt_request_ref(struct bt_gatt_request *req)
 {
-	__sync_fetch_and_add(&op->ref_count, 1);
+	if (!req)
+		return NULL;
 
-	return op;
+	__sync_fetch_and_add(&req->ref_count, 1);
+
+	return req;
 }
 
-static void discovery_op_unref(void *data)
+void bt_gatt_request_unref(struct bt_gatt_request *req)
 {
-	struct discovery_op *op = data;
-
-	if (__sync_sub_and_fetch(&op->ref_count, 1))
+	if (!req)
 		return;
 
-	if (op->destroy)
-		op->destroy(op->user_data);
+	if (__sync_sub_and_fetch(&req->ref_count, 1))
+		return;
 
-	result_destroy(op->result_head);
+	bt_gatt_request_cancel(req);
 
-	free(op);
+	if (req->destroy)
+		req->destroy(req->user_data);
+
+	result_destroy(req->result_head);
+
+	free(req);
 }
 
-static void discovery_op_complete(struct discovery_op *op, bool success,
+void bt_gatt_request_cancel(struct bt_gatt_request *req)
+{
+	if (!req)
+		return;
+
+	if (!req->id)
+		return;
+
+	bt_att_cancel(req->att, req->id);
+	req->id = 0;
+}
+
+static void async_req_unref(void *data)
+{
+	struct bt_gatt_request *req = data;
+
+	bt_gatt_request_unref(req);
+}
+
+static void discovery_op_complete(struct bt_gatt_request *op, bool success,
 								uint8_t ecode)
 {
+	/* Reset success if there is some result to report */
+	if (ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND && op->result_head)
+		success = true;
+
 	if (op->callback)
 		op->callback(success, ecode, success ? op->result_head : NULL,
 								op->user_data);
 
 	if (!op->id)
-		discovery_op_unref(op);
+		async_req_unref(op);
+	else
+		op->id = 0;
+
 }
 
 static void read_by_grp_type_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	bool success;
 	uint8_t att_ecode = 0;
 	struct bt_gatt_result *cur_result;
@@ -643,11 +655,6 @@ static void read_by_grp_type_cb(uint8_t opcode, const void *pdu,
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		success = false;
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-								op->result_head)
-			goto success;
-
 		goto done;
 	}
 
@@ -683,18 +690,30 @@ static void read_by_grp_type_cb(uint8_t opcode, const void *pdu,
 	}
 
 	last_end = get_le16(pdu + length - data_length + 2);
+
+	/*
+	 * If last handle is lower from previous start handle then it is smth
+	 * wrong. Let's stop search, otherwise we might enter infinite loop.
+	 */
+	if (last_end < op->start_handle) {
+		success = false;
+		goto done;
+	}
+
+	op->start_handle = last_end + 1;
+
 	if (last_end < op->end_handle) {
 		uint8_t pdu[6];
 
-		put_le16(last_end + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
 		put_le16(op->service_type, pdu + 4);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_READ_BY_GRP_TYPE_REQ,
-							pdu, sizeof(pdu),
-							read_by_grp_type_cb,
-							discovery_op_ref(op),
-							discovery_op_unref);
+						pdu, sizeof(pdu),
+						read_by_grp_type_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -711,7 +730,6 @@ static void read_by_grp_type_cb(uint8_t opcode, const void *pdu,
 		put_le16(op->end_handle,
 				cur_result->pdu + length - data_length + 1);
 
-success:
 	success = true;
 
 done:
@@ -721,7 +739,7 @@ done:
 static void find_by_type_val_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	bool success;
 	uint8_t att_ecode = 0;
 	uint16_t last_end;
@@ -729,11 +747,6 @@ static void find_by_type_val_cb(uint8_t opcode, const void *pdu,
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		success = false;
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-								op->result_head)
-			goto success;
-
 		goto done;
 	}
 
@@ -758,19 +771,31 @@ static void find_by_type_val_cb(uint8_t opcode, const void *pdu,
 	 * last_end is end handle of last data set
 	 */
 	last_end = get_le16(pdu + length - 2);
+
+	/*
+	* If last handle is lower from previous start handle then it is smth
+	* wrong. Let's stop search, otherwise we might enter infinite loop.
+	*/
+	if (last_end < op->start_handle) {
+		success = false;
+		goto done;
+	}
+
+	op->start_handle = last_end + 1;
+
 	if (last_end < op->end_handle) {
 		uint8_t pdu[6 + get_uuid_len(&op->uuid)];
 
-		put_le16(last_end + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
 		put_le16(op->service_type, pdu + 4);
-		put_uuid_le(&op->uuid, pdu + 6);
+		bt_uuid_to_le(&op->uuid, pdu + 6);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_FIND_BY_TYPE_VAL_REQ,
-							pdu, sizeof(pdu),
-							find_by_type_val_cb,
-							discovery_op_ref(op),
-							discovery_op_unref);
+						pdu, sizeof(pdu),
+						find_by_type_val_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -778,30 +803,31 @@ static void find_by_type_val_cb(uint8_t opcode, const void *pdu,
 		goto done;
 	}
 
-success:
-	success = true;
+	success = false;
 
 done:
 	discovery_op_complete(op, success, att_ecode);
 }
 
-static bool discover_services(struct bt_att *att, bt_uuid_t *uuid,
+static struct bt_gatt_request *discover_services(struct bt_att *att,
+					bt_uuid_t *uuid,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy,
 					bool primary)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 
 	if (!att)
-		return false;
+		return NULL;
 
-	op = new0(struct discovery_op, 1);
+	op = new0(struct bt_gatt_request, 1);
 	if (!op)
-		return false;
+		return NULL;
 
 	op->att = att;
+	op->start_handle = start;
 	op->end_handle = end;
 	op->callback = callback;
 	op->user_data = user_data;
@@ -818,16 +844,16 @@ static bool discover_services(struct bt_att *att, bt_uuid_t *uuid,
 		put_le16(op->service_type, pdu + 4);
 
 		op->id = bt_att_send(att, BT_ATT_OP_READ_BY_GRP_TYPE_REQ,
-							pdu, sizeof(pdu),
-							read_by_grp_type_cb,
-							discovery_op_ref(op),
-							discovery_op_unref);
+						pdu, sizeof(pdu),
+						read_by_grp_type_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 	} else {
 		uint8_t pdu[6 + get_uuid_len(uuid)];
 
 		if (uuid->type == BT_UUID_UNSPEC) {
 			free(op);
-			return false;
+			return NULL;
 		}
 
 		/* Discover by UUID */
@@ -836,25 +862,26 @@ static bool discover_services(struct bt_att *att, bt_uuid_t *uuid,
 		put_le16(start, pdu);
 		put_le16(end, pdu + 2);
 		put_le16(op->service_type, pdu + 4);
-		put_uuid_le(&op->uuid, pdu + 6);
+		bt_uuid_to_le(&op->uuid, pdu + 6);
 
 		op->id = bt_att_send(att, BT_ATT_OP_FIND_BY_TYPE_VAL_REQ,
-							pdu, sizeof(pdu),
-							find_by_type_val_cb,
-							discovery_op_ref(op),
-							discovery_op_unref);
+						pdu, sizeof(pdu),
+						find_by_type_val_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 	}
 
 	if (!op->id) {
 		free(op);
-		return false;
+		return NULL;
 	}
 
-	return true;
+	return bt_gatt_request_ref(op);
 }
 
-bool bt_gatt_discover_all_primary_services(struct bt_att *att, bt_uuid_t *uuid,
-					bt_gatt_discovery_callback_t callback,
+struct bt_gatt_request *bt_gatt_discover_all_primary_services(
+					struct bt_att *att, bt_uuid_t *uuid,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
@@ -863,9 +890,10 @@ bool bt_gatt_discover_all_primary_services(struct bt_att *att, bt_uuid_t *uuid,
 							destroy);
 }
 
-bool bt_gatt_discover_primary_services(struct bt_att *att, bt_uuid_t *uuid,
+struct bt_gatt_request *bt_gatt_discover_primary_services(
+					struct bt_att *att, bt_uuid_t *uuid,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
@@ -873,9 +901,10 @@ bool bt_gatt_discover_primary_services(struct bt_att *att, bt_uuid_t *uuid,
 								destroy, true);
 }
 
-bool bt_gatt_discover_secondary_services(struct bt_att *att, bt_uuid_t *uuid,
+struct bt_gatt_request *bt_gatt_discover_secondary_services(
+					struct bt_att *att, bt_uuid_t *uuid,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
@@ -884,7 +913,7 @@ bool bt_gatt_discover_secondary_services(struct bt_att *att, bt_uuid_t *uuid,
 }
 
 struct read_incl_data {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	struct bt_gatt_result *result;
 	int pos;
 	int ref_count;
@@ -898,7 +927,7 @@ static struct read_incl_data *new_read_included(struct bt_gatt_result *res)
 	if (!data)
 		return NULL;
 
-	data->op = discovery_op_ref(res->op);
+	data->op = bt_gatt_request_ref(res->op);
 	data->result = res;
 
 	return data;
@@ -918,7 +947,7 @@ static void read_included_unref(void *data)
 	if (__sync_sub_and_fetch(&read_data->ref_count, 1))
 		return;
 
-	discovery_op_unref(read_data->op);
+	async_req_unref(read_data->op);
 
 	free(read_data);
 }
@@ -930,7 +959,7 @@ static void read_included_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
 	struct read_incl_data *data = user_data;
-	struct discovery_op *op = data->op;
+	struct bt_gatt_request *op = data->op;
 	uint8_t att_ecode = 0;
 	uint8_t read_pdu[2];
 	bool success;
@@ -978,8 +1007,8 @@ static void read_included_cb(uint8_t opcode, const void *pdu,
 		op->id = bt_att_send(op->att, BT_ATT_OP_READ_BY_TYPE_REQ,
 						pdu, sizeof(pdu),
 						discover_included_cb,
-						discovery_op_ref(op),
-						discovery_op_unref);
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -1005,7 +1034,7 @@ done:
 
 static void read_included(struct read_incl_data *data)
 {
-	struct discovery_op *op = data->op;
+	struct bt_gatt_request *op = data->op;
 	uint8_t pdu[2];
 
 	memcpy(pdu, data->result->pdu + 2, sizeof(uint16_t));
@@ -1027,7 +1056,7 @@ static void read_included(struct read_incl_data *data)
 static void discover_included_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	struct bt_gatt_result *cur_result;
 	uint8_t att_ecode = 0;
 	uint16_t last_handle;
@@ -1036,11 +1065,6 @@ static void discover_included_cb(uint8_t opcode, const void *pdu,
 
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-							op->result_head)
-			goto done;
-
 		success = false;
 		goto failed;
 	}
@@ -1088,18 +1112,29 @@ static void discover_included_cb(uint8_t opcode, const void *pdu,
 	}
 
 	last_handle = get_le16(pdu + length - data_length);
+
+	/*
+	 * If last handle is lower from previous start handle then it is smth
+	 * wrong. Let's stop search, otherwise we might enter infinite loop.
+	 */
+	if (last_handle < op->start_handle) {
+		success = false;
+		goto failed;
+	}
+
+	op->start_handle = last_handle + 1;
 	if (last_handle != op->end_handle) {
 		uint8_t pdu[6];
 
-		put_le16(last_handle + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
 		put_le16(GATT_INCLUDE_UUID, pdu + 4);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_READ_BY_TYPE_REQ,
-							pdu, sizeof(pdu),
-							discover_included_cb,
-							discovery_op_ref(op),
-							discovery_op_unref);
+						pdu, sizeof(pdu),
+						discover_included_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -1107,26 +1142,25 @@ static void discover_included_cb(uint8_t opcode, const void *pdu,
 		goto failed;
 	}
 
-done:
 	success = true;
 
 failed:
 	discovery_op_complete(op, success, att_ecode);
 }
 
-bool bt_gatt_discover_included_services(struct bt_att *att,
+struct bt_gatt_request *bt_gatt_discover_included_services(struct bt_att *att,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	uint8_t pdu[6];
 
 	if (!att)
 		return false;
 
-	op = new0(struct discovery_op, 1);
+	op = new0(struct bt_gatt_request, 1);
 	if (!op)
 		return false;
 
@@ -1134,6 +1168,7 @@ bool bt_gatt_discover_included_services(struct bt_att *att,
 	op->callback = callback;
 	op->user_data = user_data;
 	op->destroy = destroy;
+	op->start_handle = start;
 	op->end_handle = end;
 
 	put_le16(start, pdu);
@@ -1141,19 +1176,20 @@ bool bt_gatt_discover_included_services(struct bt_att *att,
 	put_le16(GATT_INCLUDE_UUID, pdu + 4);
 
 	op->id = bt_att_send(att, BT_ATT_OP_READ_BY_TYPE_REQ, pdu, sizeof(pdu),
-				discover_included_cb, discovery_op_ref(op),
-				discovery_op_unref);
-	if (op->id)
-		return true;
+				discover_included_cb, bt_gatt_request_ref(op),
+				async_req_unref);
+	if (!op->id) {
+		free(op);
+		return NULL;
+	}
 
-	free(op);
-	return false;
+	return bt_gatt_request_ref(op);
 }
 
 static void discover_chrcs_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	bool success;
 	uint8_t att_ecode = 0;
 	size_t data_length;
@@ -1162,11 +1198,6 @@ static void discover_chrcs_cb(uint8_t opcode, const void *pdu,
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		success = false;
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-							op->result_head)
-			goto success;
-
 		goto done;
 	}
 
@@ -1197,18 +1228,30 @@ static void discover_chrcs_cb(uint8_t opcode, const void *pdu,
 		goto done;
 	}
 	last_handle = get_le16(pdu + length - data_length);
+
+	/*
+	 * If last handle is lower from previous start handle then it is smth
+	 * wrong. Let's stop search, otherwise we might enter infinite loop.
+	 */
+	if (last_handle < op->start_handle) {
+		success = false;
+		goto done;
+	}
+
+	op->start_handle = last_handle + 1;
+
 	if (last_handle != op->end_handle) {
 		uint8_t pdu[6];
 
-		put_le16(last_handle + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
 		put_le16(GATT_CHARAC_UUID, pdu + 4);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_READ_BY_TYPE_REQ,
 						pdu, sizeof(pdu),
 						discover_chrcs_cb,
-						discovery_op_ref(op),
-						discovery_op_unref);
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -1216,26 +1259,23 @@ static void discover_chrcs_cb(uint8_t opcode, const void *pdu,
 		goto done;
 	}
 
-success:
-	success = true;
-
 done:
 	discovery_op_complete(op, success, att_ecode);
 }
 
-bool bt_gatt_discover_characteristics(struct bt_att *att,
+struct bt_gatt_request *bt_gatt_discover_characteristics(struct bt_att *att,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	uint8_t pdu[6];
 
 	if (!att)
 		return false;
 
-	op = new0(struct discovery_op, 1);
+	op = new0(struct bt_gatt_request, 1);
 	if (!op)
 		return false;
 
@@ -1243,6 +1283,7 @@ bool bt_gatt_discover_characteristics(struct bt_att *att,
 	op->callback = callback;
 	op->user_data = user_data;
 	op->destroy = destroy;
+	op->start_handle = start;
 	op->end_handle = end;
 
 	put_le16(start, pdu);
@@ -1250,19 +1291,20 @@ bool bt_gatt_discover_characteristics(struct bt_att *att,
 	put_le16(GATT_CHARAC_UUID, pdu + 4);
 
 	op->id = bt_att_send(att, BT_ATT_OP_READ_BY_TYPE_REQ, pdu, sizeof(pdu),
-				discover_chrcs_cb, discovery_op_ref(op),
-				discovery_op_unref);
-	if (op->id)
-		return true;
+				discover_chrcs_cb, bt_gatt_request_ref(op),
+				async_req_unref);
+	if (!op->id) {
+		free(op);
+		return NULL;
+	}
 
-	free(op);
-	return false;
+	return bt_gatt_request_ref(op);
 }
 
 static void read_by_type_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	bool success;
 	uint8_t att_ecode = 0;
 	size_t data_length;
@@ -1270,13 +1312,7 @@ static void read_by_type_cb(uint8_t opcode, const void *pdu,
 
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-							op->result_head)
-			success = true;
-		else
-			success = false;
-
+		success = false;
 		goto done;
 	}
 
@@ -1300,18 +1336,30 @@ static void read_by_type_cb(uint8_t opcode, const void *pdu,
 	}
 
 	last_handle = get_le16(pdu + length - data_length);
+
+	/*
+	 * If last handle is lower from previous start handle then it is smth
+	 * wrong. Let's stop search, otherwise we might enter infinite loop.
+	 */
+	if (last_handle < op->start_handle) {
+		success = false;
+		goto done;
+	}
+
+	op->start_handle = last_handle + 1;
+
 	if (last_handle != op->end_handle) {
 		uint8_t pdu[4 + get_uuid_len(&op->uuid)];
 
-		put_le16(last_handle + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
-		put_uuid_le(&op->uuid, pdu + 4);
+		bt_uuid_to_le(&op->uuid, pdu + 4);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_READ_BY_TYPE_REQ,
 						pdu, sizeof(pdu),
 						read_by_type_cb,
-						discovery_op_ref(op),
-						discovery_op_unref);
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
@@ -1327,17 +1375,17 @@ done:
 
 bool bt_gatt_read_by_type(struct bt_att *att, uint16_t start, uint16_t end,
 					const bt_uuid_t *uuid,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	uint8_t pdu[4 + get_uuid_len(uuid)];
 
 	if (!att || !uuid || uuid->type == BT_UUID_UNSPEC)
 		return false;
 
-	op = new0(struct discovery_op, 1);
+	op = new0(struct bt_gatt_request, 1);
 	if (!op)
 		return false;
 
@@ -1345,16 +1393,18 @@ bool bt_gatt_read_by_type(struct bt_att *att, uint16_t start, uint16_t end,
 	op->callback = callback;
 	op->user_data = user_data;
 	op->destroy = destroy;
+	op->start_handle = start;
 	op->end_handle = end;
 	op->uuid = *uuid;
 
 	put_le16(start, pdu);
 	put_le16(end, pdu + 2);
-	put_uuid_le(uuid, pdu + 4);
+	bt_uuid_to_le(uuid, pdu + 4);
 
 	op->id = bt_att_send(att, BT_ATT_OP_READ_BY_TYPE_REQ, pdu, sizeof(pdu),
-					read_by_type_cb, discovery_op_ref(op),
-					discovery_op_unref);
+						read_by_type_cb,
+						bt_gatt_request_ref(op),
+						async_req_unref);
 	if (op->id)
 		return true;
 
@@ -1365,7 +1415,7 @@ bool bt_gatt_read_by_type(struct bt_att *att, uint16_t start, uint16_t end,
 static void discover_descs_cb(uint8_t opcode, const void *pdu,
 					uint16_t length, void *user_data)
 {
-	struct discovery_op *op = user_data;
+	struct bt_gatt_request *op = user_data;
 	bool success;
 	uint8_t att_ecode = 0;
 	uint8_t format;
@@ -1375,11 +1425,6 @@ static void discover_descs_cb(uint8_t opcode, const void *pdu,
 	if (opcode == BT_ATT_OP_ERROR_RSP) {
 		success = false;
 		att_ecode = process_error(pdu, length);
-
-		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND &&
-								op->result_head)
-			goto success;
-
 		goto done;
 	}
 
@@ -1416,44 +1461,54 @@ static void discover_descs_cb(uint8_t opcode, const void *pdu,
 	}
 
 	last_handle = get_le16(pdu + length - data_length);
+
+	/*
+	 * If last handle is lower from previous start handle then it is smth
+	 * wrong. Let's stop search, otherwise we might enter infinite loop.
+	 */
+	if (last_handle < op->start_handle) {
+		success = false;
+		goto done;
+	}
+
+	op->start_handle = last_handle + 1;
+
 	if (last_handle != op->end_handle) {
 		uint8_t pdu[4];
 
-		put_le16(last_handle + 1, pdu);
+		put_le16(op->start_handle, pdu);
 		put_le16(op->end_handle, pdu + 2);
 
 		op->id = bt_att_send(op->att, BT_ATT_OP_FIND_INFO_REQ,
 						pdu, sizeof(pdu),
 						discover_descs_cb,
-						discovery_op_ref(op),
-						discovery_op_unref);
+						bt_gatt_request_ref(op),
+						async_req_unref);
 		if (op->id)
 			return;
 
 		success = false;
-		goto done;
 	}
 
-success:
 	success = true;
 
 done:
 	discovery_op_complete(op, success, att_ecode);
 }
 
-bool bt_gatt_discover_descriptors(struct bt_att *att,
+struct bt_gatt_request *bt_gatt_discover_descriptors(struct bt_att *att,
 					uint16_t start, uint16_t end,
-					bt_gatt_discovery_callback_t callback,
+					bt_gatt_request_callback_t callback,
 					void *user_data,
 					bt_gatt_destroy_func_t destroy)
 {
-	struct discovery_op *op;
+	struct bt_gatt_request *op;
 	uint8_t pdu[4];
 
 	if (!att)
 		return false;
 
-	op = new0(struct discovery_op, 1);
+	op = new0(struct bt_gatt_request, 1);
 	if (!op)
 		return false;
 
@@ -1461,6 +1516,7 @@ bool bt_gatt_discover_descriptors(struct bt_att *att,
 	op->callback = callback;
 	op->user_data = user_data;
 	op->destroy = destroy;
+	op->start_handle = start;
 	op->end_handle = end;
 
 	put_le16(start, pdu);
@@ -1468,11 +1524,12 @@ bool bt_gatt_discover_descriptors(struct bt_att *att,
 
 	op->id = bt_att_send(att, BT_ATT_OP_FIND_INFO_REQ, pdu, sizeof(pdu),
 						discover_descs_cb,
-						discovery_op_ref(op),
-						discovery_op_unref);
-	if (op->id)
-		return true;
+						bt_gatt_request_ref(op),
+						async_req_unref);
+	if (!op->id) {
+		free(op);
+		return NULL;
+	}
 
-	free(op);
-	return false;
+	return bt_gatt_request_ref(op);
 }

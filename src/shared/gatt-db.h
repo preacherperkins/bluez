@@ -50,13 +50,13 @@ struct gatt_db_attribute *gatt_db_insert_service(struct gatt_db *db,
 
 typedef void (*gatt_db_read_t) (struct gatt_db_attribute *attrib,
 					unsigned int id, uint16_t offset,
-					uint8_t opcode, bdaddr_t *bdaddr,
+					uint8_t opcode, struct bt_att *att,
 					void *user_data);
 
 typedef void (*gatt_db_write_t) (struct gatt_db_attribute *attrib,
 					unsigned int id, uint16_t offset,
 					const uint8_t *value, size_t len,
-					uint8_t opcode, bdaddr_t *bdaddr,
+					uint8_t opcode, struct bt_att *att,
 					void *user_data);
 
 struct gatt_db_attribute *
@@ -67,9 +67,26 @@ gatt_db_service_add_characteristic(struct gatt_db_attribute *attrib,
 					gatt_db_read_t read_func,
 					gatt_db_write_t write_func,
 					void *user_data);
+struct gatt_db_attribute *
+gatt_db_service_insert_characteristic(struct gatt_db_attribute *attrib,
+					uint16_t handle,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					uint8_t properties,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data);
 
 struct gatt_db_attribute *
 gatt_db_service_add_descriptor(struct gatt_db_attribute *attrib,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data);
+struct gatt_db_attribute *
+gatt_db_service_insert_descriptor(struct gatt_db_attribute *attrib,
+					uint16_t handle,
 					const bt_uuid_t *uuid,
 					uint32_t permissions,
 					gatt_db_read_t read_func,
@@ -95,13 +112,14 @@ void gatt_db_read_by_group_type(struct gatt_db *db, uint16_t start_handle,
 							const bt_uuid_t type,
 							struct queue *queue);
 
-void gatt_db_find_by_type(struct gatt_db *db, uint16_t start_handle,
+unsigned int gatt_db_find_by_type(struct gatt_db *db, uint16_t start_handle,
 						uint16_t end_handle,
 						const bt_uuid_t *type,
 						gatt_db_attribute_cb_t func,
 						void *user_data);
 
-void gatt_db_find_by_type_value(struct gatt_db *db, uint16_t start_handle,
+unsigned int gatt_db_find_by_type_value(struct gatt_db *db,
+						uint16_t start_handle,
 						uint16_t end_handle,
 						const bt_uuid_t *type,
 						const void *value,
@@ -196,7 +214,7 @@ typedef void (*gatt_db_attribute_read_t) (struct gatt_db_attribute *attrib,
 						size_t length, void *user_data);
 
 bool gatt_db_attribute_read(struct gatt_db_attribute *attrib, uint16_t offset,
-				uint8_t opcode, bdaddr_t *bdaddr,
+				uint8_t opcode, struct bt_att *att,
 				gatt_db_attribute_read_t func, void *user_data);
 
 bool gatt_db_attribute_read_result(struct gatt_db_attribute *attrib,
@@ -208,7 +226,7 @@ typedef void (*gatt_db_attribute_write_t) (struct gatt_db_attribute *attrib,
 
 bool gatt_db_attribute_write(struct gatt_db_attribute *attrib, uint16_t offset,
 					const uint8_t *value, size_t len,
-					uint8_t opcode, bdaddr_t *bdaddr,
+					uint8_t opcode, struct bt_att *att,
 					gatt_db_attribute_write_t func,
 					void *user_data);
 

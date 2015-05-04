@@ -42,6 +42,7 @@
 
 static int epoll_fd;
 static int epoll_terminate;
+static int exit_status;
 
 struct mainloop_data {
 	int fd;
@@ -89,6 +90,18 @@ void mainloop_quit(void)
 	epoll_terminate = 1;
 }
 
+void mainloop_exit_success(void)
+{
+	exit_status = EXIT_SUCCESS;
+	epoll_terminate = 1;
+}
+
+void mainloop_exit_failure(void)
+{
+	exit_status = EXIT_FAILURE;
+	epoll_terminate = 1;
+}
+
 static void signal_callback(int fd, uint32_t events, void *user_data)
 {
 	struct signal_data *data = user_data;
@@ -114,19 +127,21 @@ int mainloop_run(void)
 
 	if (signal_data) {
 		if (sigprocmask(SIG_BLOCK, &signal_data->mask, NULL) < 0)
-			return 1;
+			return EXIT_FAILURE;
 
 		signal_data->fd = signalfd(-1, &signal_data->mask,
 						SFD_NONBLOCK | SFD_CLOEXEC);
 		if (signal_data->fd < 0)
-			return 1;
+			return EXIT_FAILURE;
 
 		if (mainloop_add_fd(signal_data->fd, EPOLLIN,
 				signal_callback, signal_data, NULL) < 0) {
 			close(signal_data->fd);
-			return 1;
+			return EXIT_FAILURE;
 		}
 	}
+
+	exit_status = EXIT_SUCCESS;
 
 	while (!epoll_terminate) {
 		struct epoll_event events[MAX_EPOLL_EVENTS];
@@ -170,7 +185,7 @@ int mainloop_run(void)
 	close(epoll_fd);
 	epoll_fd = 0;
 
-	return 0;
+	return exit_status;
 }
 
 int mainloop_add_fd(int fd, uint32_t events, mainloop_event_func callback,

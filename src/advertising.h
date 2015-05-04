@@ -2,7 +2,7 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2014  Instituto Nokia de Tecnologia - INdT
+ *  Copyright (C) 2015  Google Inc.
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -15,11 +15,11 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
- *
  */
 
-gboolean gatt_dbus_manager_register(void);
-void gatt_dbus_manager_unregister(void);
+struct btd_adapter;
+struct btd_advertising;
+
+struct btd_advertising *btd_advertising_manager_new(
+						struct btd_adapter *adapter);
+void btd_advertising_manager_destroy(struct btd_advertising *manager);

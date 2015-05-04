@@ -26,8 +26,10 @@
 
 #define ATT_HANDLE_SIZE	2
 
+#define L2CAP_ATT_ERROR			0x01
 #define L2CAP_ATT_EXCHANGE_MTU_REQ	0x02
 #define L2CAP_ATT_EXCHANGE_MTU_RSP	0x03
+#define L2CAP_ATT_FIND_BY_TYPE_REQ	0x06
 #define L2CAP_ATT_READ_REQ		0x0a
 #define L2CAP_ATT_READ_RSP		0x0b
 #define L2CAP_ATT_WRITE_REQ		0x12
@@ -38,6 +40,8 @@
 #define GATT_STATUS_SUCCESS	0x00000000
 #define GATT_STATUS_FAILURE	0x00000101
 #define GATT_STATUS_INS_AUTH	0x08
+
+#define GATT_ERR_INVAL_ATTR_VALUE_LEN	0x0D
 
 #define GATT_SERVER_DISCONNECTED	0
 #define GATT_SERVER_CONNECTED		1
@@ -851,6 +855,13 @@ static struct send_resp_data send_resp_data_2 = {
 	.response = &response_2,
 };
 
+static struct send_resp_data send_resp_data_2_error = {
+	.conn_id = CONN1_ID,
+	.trans_id = TRANS1_ID,
+	.status = GATT_ERR_INVAL_ATTR_VALUE_LEN,
+	.response = &response_2,
+};
+
 #define SEARCH_SERVICE_SINGLE_SUCCESS_PDUS				\
 	raw_pdu(0x10, 0x01, 0x00, 0xff, 0xff, 0x00, 0x28),		\
 	raw_pdu(0x11, 0x06, 0x01, 0x00, 0x10, 0x00, 0x00, 0x18),	\
@@ -884,9 +895,30 @@ static struct iovec search_service_3[] = {
 	end_pdu
 };
 
+static struct iovec search_service_4[] = {
+	raw_pdu(0x10, 0x01, 0x00, 0xff, 0xff, 0x00, 0x28),
+	raw_pdu(0x11, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x18),
+	end_pdu
+};
+
 static struct iovec get_characteristic_1[] = {
 	SEARCH_SERVICE_SINGLE_SUCCESS_PDUS,
 	READ_BY_TYPE_SINGLE_CHARACTERISTIC_PDUS,
+	end_pdu
+};
+
+static struct iovec get_characteristic_2[] = {
+	SEARCH_SERVICE_SINGLE_SUCCESS_PDUS,
+	raw_pdu(0x08, 0x01, 0x00, 0x10, 0x00, 0x03, 0x28),
+	raw_pdu(0x09, 0x07, 0x00, 0x00, 0x04, 0x00, 0x00, 0x19, 0x00),
+	end_pdu
+};
+
+static struct iovec get_descriptor_0[] = {
+	SEARCH_SERVICE_SINGLE_SUCCESS_PDUS,
+	READ_BY_TYPE_SINGLE_CHARACTERISTIC_PDUS,
+	raw_pdu(0x04, 0x01, 0x00, 0x10, 0x00),
+	raw_pdu(0x05, 0x01, 0x00, 0x00, 0x00, 0x29),
 	end_pdu
 };
 
@@ -915,6 +947,13 @@ static struct iovec get_descriptor_3[] = {
 	READ_BY_TYPE_SINGLE_CHARACTERISTIC_PDUS,
 	raw_pdu(0x04, 0x01, 0x00, 0x10, 0x00),
 	raw_pdu(0x01, 0x04, 0x01, 0x00, 0x0a),
+	end_pdu
+};
+
+static struct iovec get_included_0[] = {
+	SEARCH_SERVICE_SINGLE_SUCCESS_PDUS,
+	raw_pdu(0x08, 0x01, 0x00, 0x10, 0x00, 0x02, 0x28),
+	raw_pdu(0x09, 0x08, 0x00, 0x00, 0x15, 0x00, 0x19, 0x00, 0xff, 0xfe),
 	end_pdu
 };
 
@@ -1080,11 +1119,20 @@ static struct iovec send_notification_1[] = {
 	end_pdu
 };
 
+static struct iovec search_range_1[] = {
+	raw_pdu(0x01, 0xff, 0xff, 0xff),
+	end_pdu
+};
+
+static struct iovec primary_type = raw_pdu(0x00, 0x28);
+
 /* att commands define raw pdus */
 static struct iovec att_read_req_op_v = raw_pdu(L2CAP_ATT_READ_REQ);
 static struct iovec att_write_req_op_v = raw_pdu(L2CAP_ATT_WRITE_REQ);
+static struct iovec att_find_by_type_req_op_v =
+					raw_pdu(L2CAP_ATT_FIND_BY_TYPE_REQ);
 
-static struct iovec svc_change_ccc_handle_v = raw_pdu(0x1a, 0x00);
+static struct iovec svc_change_ccc_handle_v = raw_pdu(0x1c, 0x00);
 static struct iovec svc_change_ccc_value_v = raw_pdu(0x00, 0x01);
 
 static void gatt_client_register_action(void)
@@ -1575,6 +1623,14 @@ static void gatt_cid_hook_cb(const void *data, uint16_t len, void *user_data)
 	tester_debug("Received att pdu with opcode 0x%02x", pdu[0]);
 
 	switch (pdu[0]) {
+	case L2CAP_ATT_ERROR:
+		step = g_new0(struct step, 1);
+
+		step->callback = CB_EMU_ATT_ERROR;
+		step->callback_result.error = pdu[4];
+
+		schedule_callback_verification(step);
+		break;
 	case L2CAP_ATT_EXCHANGE_MTU_REQ:
 		tester_print("Exchange MTU request received.");
 
@@ -1594,7 +1650,7 @@ static void gatt_cid_hook_cb(const void *data, uint16_t len, void *user_data)
 		step->callback = CB_EMU_VALUE_INDICATION;
 
 		schedule_callback_verification(step);
-		break;
+		goto respond;
 	case L2CAP_ATT_HANDLE_VALUE_NOTIFY:
 		step = g_new0(struct step, 1);
 
@@ -1631,6 +1687,7 @@ static void gatt_cid_hook_cb(const void *data, uint16_t len, void *user_data)
 			break;
 		}
 
+respond:
 		if (memcmp(gatt_pdu->iov_base, data, len)) {
 			tester_print("Incoming data mismatch");
 			break;
@@ -2108,6 +2165,27 @@ static struct test_case test_cases[] = {
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
+	TEST_CASE_BREDRLE("Gatt Client - Search Service - Incorrect rsp",
+		ACTION_SUCCESS(init_pdus, search_service_4),
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_client_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTC_REGISTER_CLIENT, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_client_start_scan_action, NULL),
+		CLLBACK_GATTC_SCAN_RES(prop_emu_remotes_default_set, 1, TRUE),
+		ACTION_SUCCESS(gatt_client_stop_scan_action, NULL),
+		ACTION_SUCCESS(gatt_client_connect_action, &app1_conn_req),
+		CALLBACK_GATTC_CONNECT(GATT_STATUS_SUCCESS,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		ACTION_SUCCESS(gatt_client_search_services, &search_services_1),
+		CALLBACK_GATTC_SEARCH_COMPLETE(GATT_STATUS_SUCCESS, CONN1_ID),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+	),
 	TEST_CASE_BREDRLE("Gatt Client - Get Characteristic - Single",
 		ACTION_SUCCESS(init_pdus, get_characteristic_1),
 		ACTION_SUCCESS(bluetooth_enable_action, NULL),
@@ -2130,6 +2208,31 @@ static struct test_case test_cases[] = {
 							&get_char_data_1),
 		CALLBACK_GATTC_GET_CHARACTERISTIC_CB(GATT_STATUS_SUCCESS,
 				CONN1_ID, &service_1, &characteristic_1, 4),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+	),
+	TEST_CASE_BREDRLE("Gatt Client - Get Characteristic - Incorrect rsp",
+		ACTION_SUCCESS(init_pdus, get_characteristic_2),
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_client_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTC_REGISTER_CLIENT, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_client_start_scan_action, NULL),
+		CLLBACK_GATTC_SCAN_RES(prop_emu_remotes_default_set, 1, TRUE),
+		ACTION_SUCCESS(gatt_client_stop_scan_action, NULL),
+		ACTION_SUCCESS(gatt_client_connect_action, &app1_conn_req),
+		CALLBACK_GATTC_CONNECT(GATT_STATUS_SUCCESS,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		ACTION_SUCCESS(gatt_client_search_services, &search_services_1),
+		CALLBACK_GATTC_SEARCH_COMPLETE(GATT_STATUS_SUCCESS, CONN1_ID),
+		ACTION_SUCCESS(gatt_client_get_characteristic_action,
+							&get_char_data_1),
+		CALLBACK_GATTC_GET_CHARACTERISTIC_CB(GATT_STATUS_FAILURE,
+				CONN1_ID, &service_1, NULL, 0),
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
@@ -2156,6 +2259,35 @@ static struct test_case test_cases[] = {
 		CALLBACK_GATTC_GET_CHARACTERISTIC_CB(GATT_STATUS_FAILURE,
 							CONN1_ID, &service_2,
 							NULL, 0),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+	),
+	TEST_CASE_BREDRLE("Gatt Client - Get Descriptor - Incorrect rsp",
+		ACTION_SUCCESS(init_pdus, get_descriptor_0),
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_client_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTC_REGISTER_CLIENT, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_client_start_scan_action, NULL),
+		CLLBACK_GATTC_SCAN_RES(prop_emu_remotes_default_set, 1, TRUE),
+		ACTION_SUCCESS(gatt_client_stop_scan_action, NULL),
+		ACTION_SUCCESS(gatt_client_connect_action, &app1_conn_req),
+		CALLBACK_GATTC_CONNECT(GATT_STATUS_SUCCESS,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		ACTION_SUCCESS(gatt_client_search_services, &search_services_1),
+		CALLBACK_GATTC_SEARCH_COMPLETE(GATT_STATUS_SUCCESS, CONN1_ID),
+		ACTION_SUCCESS(gatt_client_get_characteristic_action,
+							&get_char_data_1),
+		CALLBACK_GATTC_GET_CHARACTERISTIC_CB(GATT_STATUS_SUCCESS,
+				CONN1_ID, &service_1, &characteristic_1, 4),
+		ACTION_SUCCESS(gatt_client_get_descriptor_action,
+							&get_desc_data_1),
+		CALLBACK_GATTC_GET_DESCRIPTOR(GATT_STATUS_FAILURE, CONN1_ID,
+				&service_1, &characteristic_1, NULL),
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
@@ -2253,6 +2385,31 @@ static struct test_case test_cases[] = {
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
+	TEST_CASE_BREDRLE("Gatt Client - Get Included Services - Incorrect rsp",
+		ACTION_SUCCESS(init_pdus, get_included_0),
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_client_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTC_REGISTER_CLIENT, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_client_start_scan_action, NULL),
+		CLLBACK_GATTC_SCAN_RES(prop_emu_remotes_default_set, 1, TRUE),
+		ACTION_SUCCESS(gatt_client_stop_scan_action, NULL),
+		ACTION_SUCCESS(gatt_client_connect_action, &app1_conn_req),
+		CALLBACK_GATTC_CONNECT(GATT_STATUS_SUCCESS,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		ACTION_SUCCESS(gatt_client_search_services, &search_services_1),
+		CALLBACK_GATTC_SEARCH_COMPLETE(GATT_STATUS_SUCCESS, CONN1_ID),
+		ACTION_SUCCESS(gatt_client_get_included_action,
+							&get_incl_data_1),
+		CALLBACK_GATTC_GET_INCLUDED(GATT_STATUS_FAILURE, CONN1_ID,
+							&service_1, NULL),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+		),
 	TEST_CASE_BREDRLE("Gatt Client - Get Included Service - 16 UUID",
 		ACTION_SUCCESS(init_pdus, get_included_1),
 		ACTION_SUCCESS(bluetooth_enable_action, NULL),
@@ -3240,6 +3397,7 @@ static struct test_case test_cases[] = {
 		ACTION_SUCCESS(gatt_server_send_indication_action,
 						&send_indication_data_1),
 		CALLBACK(CB_EMU_VALUE_INDICATION),
+		CALLBACK_GATTS_NOTIF_CONF(CONN1_ID, GATT_STATUS_SUCCESS),
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
@@ -3263,6 +3421,7 @@ static struct test_case test_cases[] = {
 						CONN1_ID, APP1_ID),
 		ACTION_SUCCESS(gatt_server_send_indication_action,
 						&send_indication_data_2),
+		CALLBACK_GATTS_NOTIF_CONF(CONN1_ID, GATT_STATUS_SUCCESS),
 		CALLBACK(CB_EMU_VALUE_NOTIFICATION),
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
@@ -3379,6 +3538,46 @@ static struct test_case test_cases[] = {
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
+	TEST_CASE_BREDRLE("Gatt Server - Find By Type - Attribute not found",
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_server_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTS_REGISTER_SERVER, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_server_add_service_action,
+							&add_service_data_5),
+		CALLBACK_GATTS_SERVICE_ADDED(GATT_STATUS_SUCCESS, APP1_ID,
+							&service_add_1, NULL,
+							&srvc1_handle),
+		ACTION_SUCCESS(gatt_server_add_char_action, &add_char_data_2),
+		CALLBACK_GATTS_CHARACTERISTIC_ADDED(GATT_STATUS_SUCCESS,
+							APP1_ID, &app1_uuid,
+							&srvc1_handle, NULL,
+							&char1_handle),
+		ACTION_SUCCESS(gatt_server_start_srvc_action,
+							&start_srvc_data_2),
+		CALLBACK_GATTS_SERVICE_STARTED(GATT_STATUS_SUCCESS, APP1_ID,
+								&srvc1_handle),
+		ACTION_SUCCESS(bt_start_discovery_action, NULL),
+		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
+							BT_DISCOVERY_STARTED),
+		CALLBACK_DEVICE_FOUND(prop_emu_remotes_default_le_set, 2),
+		ACTION_SUCCESS(bt_cancel_discovery_action, NULL),
+		ACTION_SUCCESS(gatt_server_connect_action, &app1_conn_req),
+		CALLBACK_GATTS_CONNECTION(GATT_SERVER_CONNECTED,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		PROCESS_DATA(GATT_STATUS_SUCCESS,
+						gatt_remote_send_raw_pdu_action,
+						&att_find_by_type_req_op_v,
+						&search_range_1,
+						&primary_type),
+		CALLBACK_ERROR(CB_EMU_ATT_ERROR, 0x0a),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+	),
 	/* This tests embeded ccc */
 	TEST_CASE_BREDRLE("Gatt Server - Srvc change write req. success",
 		ACTION_SUCCESS(bluetooth_enable_action, NULL),
@@ -3412,6 +3611,53 @@ static struct test_case test_cases[] = {
 		ACTION_SUCCESS(bluetooth_disable_action, NULL),
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
 	),
+	TEST_CASE_BREDRLE("Gatt Server - Send error resp to write char request",
+		ACTION_SUCCESS(bluetooth_enable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
+		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
+		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_connect_cb_action, gatt_conn_cb),
+		ACTION_SUCCESS(gatt_server_register_action, &app1_uuid),
+		CALLBACK_STATUS(CB_GATTS_REGISTER_SERVER, BT_STATUS_SUCCESS),
+		ACTION_SUCCESS(gatt_server_add_service_action,
+							&add_service_data_5),
+		CALLBACK_GATTS_SERVICE_ADDED(GATT_STATUS_SUCCESS, APP1_ID,
+							&service_add_1, NULL,
+							&srvc1_handle),
+		ACTION_SUCCESS(gatt_server_add_char_action, &add_char_data_2),
+		CALLBACK_GATTS_CHARACTERISTIC_ADDED(GATT_STATUS_SUCCESS,
+							APP1_ID, &app1_uuid,
+							&srvc1_handle, NULL,
+							&char1_handle),
+		ACTION_SUCCESS(gatt_server_start_srvc_action,
+							&start_srvc_data_2),
+		CALLBACK_GATTS_SERVICE_STARTED(GATT_STATUS_SUCCESS, APP1_ID,
+								&srvc1_handle),
+		ACTION_SUCCESS(bt_start_discovery_action, NULL),
+		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
+							BT_DISCOVERY_STARTED),
+		CALLBACK_DEVICE_FOUND(prop_emu_remotes_default_le_set, 2),
+		ACTION_SUCCESS(bt_cancel_discovery_action, NULL),
+		ACTION_SUCCESS(gatt_server_connect_action, &app1_conn_req),
+		CALLBACK_GATTS_CONNECTION(GATT_SERVER_CONNECTED,
+						prop_emu_remotes_default_set,
+						CONN1_ID, APP1_ID),
+		PROCESS_DATA(GATT_STATUS_SUCCESS,
+					gatt_remote_send_raw_pdu_action,
+					&att_write_req_op_v, &char1_handle_v,
+					&att_write_req_value_1_v),
+		CALLBACK_GATTS_REQUEST_WRITE(CONN1_ID, TRANS1_ID,
+						prop_emu_remotes_default_set,
+						&char1_handle, 0,
+						sizeof(att_write_req_value_1),
+						true, false,
+						att_write_req_value_1),
+		ACTION_SUCCESS(gatt_server_send_response_action,
+						&send_resp_data_2_error),
+		CALLBACK_ERROR(CB_EMU_ATT_ERROR, GATT_ERR_INVAL_ATTR_VALUE_LEN),
+		ACTION_SUCCESS(bluetooth_disable_action, NULL),
+		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_OFF),
+		),
 };
 
 struct queue *get_gatt_tests(void)

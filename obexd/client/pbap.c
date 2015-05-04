@@ -29,14 +29,16 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+
 #include <glib.h>
-#include <gdbus/gdbus.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/sdp.h>
-#include <gobex/gobex-apparam.h>
+#include "lib/bluetooth.h"
+#include "lib/sdp.h"
 
-#include "log.h"
+#include "gobex/gobex-apparam.h"
+#include "gdbus/gdbus.h"
+
+#include "obexd/src/log.h"
 
 #include "transfer.h"
 #include "session.h"

@@ -183,8 +183,8 @@ static void handle_unknown_at_command(struct hfp_gw *hfp,
 							const char *data)
 {
 	if (hfp->command_callback) {
-		hfp->command_callback(data, hfp->command_data);
 		hfp->result_pending = true;
+		hfp->command_callback(data, hfp->command_data);
 	} else {
 		hfp_gw_send_result(hfp, HFP_RESULT_ERROR);
 	}
@@ -263,6 +263,7 @@ done:
 		return true;
 	}
 
+	hfp->result_pending = true;
 	handler->callback(&context, type, handler->user_data);
 
 	return true;
@@ -610,10 +611,9 @@ struct hfp_gw *hfp_gw_new(int fd)
 		return NULL;
 	}
 
-	if (!io_set_read_handler(hfp->io, can_read_data,
-					hfp, read_watch_destroy)) {
-		queue_destroy(hfp->cmd_handlers,
-						destroy_cmd_handler);
+	if (!io_set_read_handler(hfp->io, can_read_data, hfp,
+							read_watch_destroy)) {
+		queue_destroy(hfp->cmd_handlers, destroy_cmd_handler);
 		io_destroy(hfp->io);
 		ringbuf_free(hfp->write_buf);
 		ringbuf_free(hfp->read_buf);
@@ -762,7 +762,7 @@ bool hfp_gw_send_result(struct hfp_gw *hfp, enum hfp_result result)
 	 */
 	if (hfp->result_pending) {
 		hfp->result_pending = false;
-		can_read_data(hfp->io, hfp);
+		process_input(hfp);
 	}
 
 	return true;
@@ -778,7 +778,14 @@ bool hfp_gw_send_error(struct hfp_gw *hfp, enum hfp_error error)
 
 	wakeup_writer(hfp);
 
-	hfp->result_pending = false;
+	/*
+	 * There might be already something to read in the ring buffer.
+	 * If so, let's read it.
+	 */
+	if (hfp->result_pending) {
+		hfp->result_pending = false;
+		process_input(hfp);
+	}
 
 	return true;
 }

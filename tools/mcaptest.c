@@ -30,11 +30,11 @@
 #include <getopt.h>
 #include <unistd.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
-
 #include <glib.h>
+
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
+#include "lib/hci_lib.h"
 
 #include "btio/btio.h"
 #include "lib/l2cap.h"
@@ -71,20 +71,27 @@ static gboolean no_close = FALSE;
 
 #define REQ_CLOCK_ACC 0x1400
 
-static void mdl_connected_cb(struct mcap_mdl *mdl, void *data)
+static void mdl_close(struct mcap_mdl *mdl)
 {
 	int fd = -1;
 
 	printf("%s\n", __func__);
 
-	if (mdl_disconnect && mdl_disconnect_timeout >= 0) {
+	if (mdl_disconnect_timeout >= 0)
 		sleep(mdl_disconnect_timeout);
 
-		fd = mcap_mdl_get_fd(mdl);
+	fd = mcap_mdl_get_fd(mdl);
 
-		if (fd > 0)
-			close(fd);
-	}
+	if (fd > 0)
+		close(fd);
+}
+
+static void mdl_connected_cb(struct mcap_mdl *mdl, void *data)
+{
+	printf("%s\n", __func__);
+
+	if (mdl_disconnect)
+		mdl_close(mdl);
 }
 
 static void mdl_closed_cb(struct mcap_mdl *mdl, void *data)
@@ -94,7 +101,13 @@ static void mdl_closed_cb(struct mcap_mdl *mdl, void *data)
 	if (mcl_disconnect && mcl_disconnect_timeout >= 0) {
 		sleep(mcl_disconnect_timeout);
 
+		printf("Closing MCAP communication link\n");
 		mcap_close_mcl(mcl, TRUE);
+
+		if (no_close)
+			return;
+
+		g_main_loop_quit(mloop);
 	}
 }
 
@@ -102,6 +115,10 @@ static void mdl_deleted_cb(struct mcap_mdl *mdl, void *data)
 {
 	/* TODO */
 	printf("%s\n", __func__);
+
+	/* Disconnecting MDL latency timeout */
+	if (mdl_disconnect_timeout >= 0)
+		sleep(mdl_disconnect_timeout);
 }
 
 static void mdl_aborted_cb(struct mcap_mdl *mdl, void *data)
@@ -152,7 +169,7 @@ static void mcl_reconnected(struct mcap_mcl *mcl, gpointer data)
 static void mcl_disconnected(struct mcap_mcl *mcl, gpointer data)
 {
 	/* TODO */
-	printf("MCL disconnected\n");
+	printf("%s\n", __func__);
 
 	if (no_close)
 		return;
@@ -163,20 +180,27 @@ static void mcl_disconnected(struct mcap_mcl *mcl, gpointer data)
 static void mcl_uncached(struct mcap_mcl *mcl, gpointer data)
 {
 	/* TODO */
-	printf("MCL uncached unsupported\n");
+	printf("%s\n", __func__);
 }
 
 static void connect_mdl_cb(struct mcap_mdl *mdl, GError *gerr, gpointer data)
 {
 	mdlid = mcap_mdl_get_mdlid(mdl);
 
-	printf("MDL %d connected\n", mdlid);
+	printf("%s\n", __func__);
+
+	if (mdlid == MCAP_MDLID_RESERVED)
+		printf("MCAP mdlid is reserved");
+	else
+		printf("MDL %d connected\n", mdlid);
 }
 
 static void create_mdl_cb(struct mcap_mdl *mcap_mdl, uint8_t type, GError *gerr,
 								gpointer data)
 {
 	GError *err = NULL;
+
+	printf("%s\n", __func__);
 
 	if (gerr) {
 		printf("MDL error: %s\n", gerr->message);
@@ -234,6 +258,7 @@ static void trigger_mdl_action(int mode)
 	}
 
 	if (mode == MODE_CONNECT) {
+		printf("Creating MCAP Data End Point\n");
 		mcap_create_mdl(mcl, 1, 0, create_mdl_cb, NULL, NULL, &gerr);
 		if (gerr) {
 			printf("Could not connect MDL: %s\n", gerr->message);
@@ -286,6 +311,7 @@ static void create_mcl_cb(struct mcap_mcl *mcap_mcl, GError *err, gpointer data)
 	mcl = mcap_mcl_ref(mcap_mcl);
 	trigger_mdl_action(data_mode);
 }
+
 static void usage(void)
 {
 	printf("mcaptest - MCAP testing ver %s\n", VERSION);
@@ -293,10 +319,12 @@ static void usage(void)
 		"\tmcaptest <control_mode> <data_mode> [options]\n");
 	printf("Control Link Mode:\n"
 		"\t-c connect <dst_addr>\n"
+		"\t-b close control link after closing data link\n"
 		"\t-e <timeout> disconnect MCL and quit after MDL is closed\n"
 		"\t-g send clock sync capability request if MCL connected\n");
 	printf("Data Link Mode:\n"
 		"\t-d connect\n"
+		"\t-a close data link immediately after being connected"
 		"\t-f <timeout> disconnect MDL after it's connected\n"
 		"\t-u send \'Unavailable\' on first MDL connection request\n");
 	printf("Options:\n"
@@ -313,6 +341,8 @@ static struct option main_options[] = {
 	{ "disconnect_cl",	1, 0, 'e' },
 	{ "synccap_req",	0, 0, 'g' },
 	{ "connect_dl",		0, 0, 'd' },
+	{ "disconnect_da",	0, 0, 'a' },
+	{ "disconnect_ca",	0, 0, 'b' },
 	{ "disconnect_dl",	1, 0, 'f' },
 	{ "unavailable_dl",	0, 0, 'u' },
 	{ "no exit mcl dis/err",0, 0, 'n' },
@@ -320,6 +350,7 @@ static struct option main_options[] = {
 	{ "data_ch",		1, 0, 'D' },
 	{ 0, 0, 0, 0 }
 };
+
 int main(int argc, char *argv[])
 {
 	GError *err = NULL;
@@ -337,7 +368,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while ((opt = getopt_long(argc, argv, "+i:c:C:D:e:f:dghun",
+	while ((opt = getopt_long(argc, argv, "+i:c:C:D:e:f:dghunab",
 						main_options, NULL)) != EOF) {
 		switch (opt) {
 		case 'i':
@@ -359,14 +390,22 @@ int main(int argc, char *argv[])
 
 			break;
 
-		case 'e':
+		case 'a':
+			mdl_disconnect = TRUE;
+
+			break;
+
+		case 'b':
 			mcl_disconnect = TRUE;
+
+			break;
+
+		case 'e':
 			mcl_disconnect_timeout = atoi(optarg);
 
 			break;
 
 		case 'f':
-			mdl_disconnect = TRUE;
 			mdl_disconnect_timeout = atoi(optarg);
 
 			break;

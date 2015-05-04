@@ -35,8 +35,8 @@
 #include <stdbool.h>
 #include <sys/socket.h>
 
-#include "bluetooth/bluetooth.h"
-#include "bluetooth/hci.h"
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
 
 #include "src/shared/util.h"
 #include "src/shared/crypto.h"
@@ -808,6 +808,9 @@ static void smp_conn_bredr(struct smp_conn *conn, uint8_t encrypt)
 		return;
 
 	conn->sc = true;
+
+	if (!conn->out)
+		return;
 
 	fixed_chan = bthost_conn_get_fixed_chan(smp->bthost, conn->handle);
 	if (!(fixed_chan & L2CAP_FC_SMP_BREDR))

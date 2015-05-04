@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#include "lib/bluetooth.h"
 #include "uuid.h"
 
 static uint128_t bluetooth_base_uuid = {
@@ -289,4 +290,26 @@ int bt_string_to_uuid(bt_uuid_t *uuid, const char *string)
 int bt_uuid_strcmp(const void *a, const void *b)
 {
 	return strcasecmp(a, b);
+}
+
+int bt_uuid_to_le(const bt_uuid_t *src, void *dst)
+{
+	bt_uuid_t uuid;
+
+	switch (src->type) {
+	case BT_UUID16:
+		bt_put_le16(src->value.u16, dst);
+		return 0;
+	case BT_UUID32:
+		bt_uuid32_to_uuid128(src, &uuid);
+		src = &uuid;
+		/* Fallthrough */
+	case BT_UUID128:
+		/* Convert from 128-bit BE to LE */
+		bswap_128(&src->value.u128, dst);
+		return 0;
+	case BT_UUID_UNSPEC:
+	default:
+		return -EINVAL;
+	}
 }

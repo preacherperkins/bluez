@@ -1,6 +1,6 @@
 if ANDROID
 
-AM_CFLAGS += -DANDROID_VERSION=0x050000
+AM_CFLAGS += -DANDROID_VERSION=0x050100
 
 android_plugindir = $(abs_top_srcdir)/android/.libs
 
@@ -102,6 +102,8 @@ noinst_PROGRAMS += android/avdtptest
 android_avdtptest_SOURCES = android/avdtptest.c \
 				src/log.h src/log.c \
 				btio/btio.h btio/btio.c \
+				src/shared/util.h src/shared/util.c \
+				src/shared/queue.h src/shared/queue.c \
 				android/avdtp.h android/avdtp.c
 android_avdtptest_CFLAGS = $(AM_CFLAGS)
 android_avdtptest_LDADD = lib/libbluetooth-internal.la @GLIB_LIBS@
@@ -218,6 +220,9 @@ android_test_ipc_LDADD = src/libshared-glib.la @GLIB_LIBS@
 endif
 
 EXTRA_DIST += android/Android.mk android/README \
+				android/compat/readline/history.h \
+				android/compat/readline/readline.h \
+				android/compat/wordexp.h \
 				android/bluetoothd-wrapper.c \
 				android/log.c \
 				android/bluetoothd.te \
@@ -252,6 +257,8 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pics-scpp.txt \
 				android/pics-dis.txt \
 				android/pics-avdtp.txt \
+				android/pics-gavdp.txt \
+				android/pics-bnep.txt \
 				android/pixit-l2cap.txt \
 				android/pixit-gap.txt \
 				android/pixit-did.txt \
@@ -277,6 +284,9 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pixit-rfcomm.txt \
 				android/pixit-spp.txt \
 				android/pixit-avdtp.txt \
+				android/pixit-gavdp.txt \
+				android/pixit-sdp.txt \
+				android/pixit-bnep.txt \
 				android/pts-rfcomm.txt \
 				android/pts-spp.txt \
 				android/pts-l2cap.txt \
@@ -301,4 +311,7 @@ EXTRA_DIST += android/Android.mk android/README \
 				android/pts-hogp.txt \
 				android/pts-scpp.txt \
 				android/pts-dis.txt \
-				android/pts-avdtp.txt
+				android/pts-avdtp.txt \
+				android/pts-gavdp.txt \
+				android/pts-sdp.txt \
+				android/pts-bnep.txt

@@ -30,14 +30,17 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <stdlib.h>
-#include <glib.h>
-#include <gdbus/gdbus.h>
-#include <gobex/gobex-apparam.h>
-#include <bluetooth/sdp.h>
 
+#include <glib.h>
+
+#include "lib/sdp.h"
+
+#include "gobex/gobex-apparam.h"
+#include "gdbus/gdbus.h"
+
+#include "obexd/src/log.h"
+#include "obexd/src/map_ap.h"
 #include "dbus.h"
-#include "log.h"
-#include "map_ap.h"
 #include "map-event.h"
 
 #include "map.h"

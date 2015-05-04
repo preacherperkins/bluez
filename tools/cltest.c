@@ -36,12 +36,12 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
-#include <bluetooth/l2cap.h>
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
+#include "lib/hci_lib.h"
+#include "lib/l2cap.h"
 
-#include "monitor/mainloop.h"
+#include "src/shared/mainloop.h"
 
 static bool send_message(const bdaddr_t *src, const bdaddr_t *dst,
 							uint16_t psm)

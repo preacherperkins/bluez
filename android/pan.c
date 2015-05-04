@@ -324,13 +324,12 @@ static void connect_cb(GIOChannel *chan, GError *err, gpointer data)
 	if (!dev->session)
 		goto fail;
 
-	perr = bnep_connect(dev->session, bnep_conn_cb, dev);
+	perr = bnep_connect(dev->session, bnep_conn_cb, bnep_disconn_cb, dev,
+									dev);
 	if (perr < 0) {
 		error("bnep connect req failed: %s", strerror(-perr));
 		goto fail;
 	}
-
-	bnep_set_disconnect(dev->session, bnep_disconn_cb, dev);
 
 	if (dev->io) {
 		g_io_channel_unref(dev->io);
@@ -463,8 +462,6 @@ static gboolean nap_setup_cb(GIOChannel *chan, GIOCondition cond,
 {
 	struct pan_device *dev = user_data;
 	uint8_t packet[BNEP_MTU];
-	struct bnep_setup_conn_req *req = (void *) packet;
-	uint16_t src_role, dst_role, rsp = BNEP_CONN_NOT_ALLOWED;
 	int sk, n, err;
 
 	if (cond & (G_IO_ERR | G_IO_HUP | G_IO_NVAL)) {
@@ -481,50 +478,21 @@ static gboolean nap_setup_cb(GIOChannel *chan, GIOCondition cond,
 		goto failed;
 	}
 
-	/* Highest known control command id BNEP_FILTER_MULT_ADDR_RSP 0x06 */
-	if (req->type == BNEP_CONTROL &&
-					req->ctrl > BNEP_FILTER_MULT_ADDR_RSP) {
-		error("cmd not understood");
-		bnep_send_ctrl_rsp(sk, BNEP_CONTROL, BNEP_CMD_NOT_UNDERSTOOD,
-								req->ctrl);
-		goto failed;
-	}
-
-	if (req->type != BNEP_CONTROL || req->ctrl != BNEP_SETUP_CONN_REQ) {
-		error("cmd is not BNEP_SETUP_CONN_REQ %02X %02X", req->type,
-								req->ctrl);
-		goto failed;
-	}
-
-	rsp = bnep_setup_decode(req, &dst_role, &src_role);
-	if (rsp) {
-		error("bnep_setup_decode failed");
-		goto failed;
-	}
-
-	rsp = bnep_setup_chk(dst_role, src_role);
-	if (rsp) {
-		error("benp_setup_chk failed");
+	if (n < 3) {
+		error("pan: to few setup connection request data received");
 		goto failed;
 	}
 
 	err = nap_create_bridge();
-	if (err < 0) {
+	if (err < 0)
 		error("pan: Failed to create bridge: %s (%d)", strerror(-err),
 									-err);
+
+	if (bnep_server_add(sk, (err < 0) ? NULL : BNEP_BRIDGE, dev->iface,
+						&dev->dst, packet, n) < 0) {
+		error("pan: server_connadd failed");
 		goto failed;
 	}
-
-	if (bnep_server_add(sk, dst_role, BNEP_BRIDGE, dev->iface,
-							&dev->dst) < 0) {
-		nap_remove_bridge();
-		error("server_connadd failed");
-		rsp = BNEP_CONN_NOT_ALLOWED;
-		goto failed;
-	}
-
-	rsp = BNEP_SUCCESS;
-	bnep_send_ctrl_rsp(sk, BNEP_CONTROL, BNEP_SETUP_CONN_RSP, rsp);
 
 	dev->watch = g_io_add_watch(chan, G_IO_HUP | G_IO_ERR | G_IO_NVAL,
 							nap_watchdog_cb, dev);
@@ -537,7 +505,6 @@ static gboolean nap_setup_cb(GIOChannel *chan, GIOCondition cond,
 	return FALSE;
 
 failed:
-	bnep_send_ctrl_rsp(sk, BNEP_CONTROL, BNEP_SETUP_CONN_RSP, rsp);
 	pan_device_remove(dev);
 
 	return FALSE;
@@ -636,7 +603,7 @@ static int register_nap_server(void)
 		destroy_nap_device();
 		error("%s", gerr->message);
 		g_error_free(gerr);
-		return -EINVAL;
+		return -EIO;
 	}
 
 	return 0;

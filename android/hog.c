@@ -36,16 +36,16 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include <bluetooth/bluetooth.h>
-
 #include <glib.h>
 
-#include "src/log.h"
-
+#include "lib/bluetooth.h"
+#include "lib/sdp.h"
 #include "lib/uuid.h"
+
 #include "src/shared/util.h"
 #include "src/shared/uhid.h"
 #include "src/shared/queue.h"
+#include "src/log.h"
 
 #include "attrib/att.h"
 #include "attrib/gattrib.h"
@@ -87,6 +87,7 @@ struct bt_hog {
 	GAttrib			*attrib;
 	GSList			*reports;
 	struct bt_uhid		*uhid;
+	int			uhid_fd;
 	gboolean		has_report_id;
 	uint16_t		bcdhid;
 	uint8_t			bcountrycode;
@@ -99,7 +100,7 @@ struct bt_hog {
 	uint16_t		setrep_id;
 	struct bt_scpp		*scpp;
 	struct bt_dis		*dis;
-	struct bt_bas		*bas;
+	struct queue		*bas;
 	GSList			*instances;
 	struct queue		*gatt_op;
 };
@@ -1157,11 +1158,11 @@ static void hog_free(void *data)
 
 	bt_hog_detach(hog);
 
+	queue_destroy(hog->bas, (void *) bt_bas_unref);
 	g_slist_free_full(hog->instances, hog_free);
 
 	bt_scpp_unref(hog->scpp);
 	bt_dis_unref(hog->dis);
-	bt_bas_unref(hog->bas);
 	bt_uhid_unref(hog->uhid);
 	g_slist_free_full(hog->reports, report_free);
 	g_free(hog->name);
@@ -1170,8 +1171,16 @@ static void hog_free(void *data)
 	g_free(hog);
 }
 
-struct bt_hog *bt_hog_new(const char *name, uint16_t vendor, uint16_t product,
-					uint16_t version, void *primary)
+struct bt_hog *bt_hog_new_default(const char *name, uint16_t vendor,
+					uint16_t product, uint16_t version,
+					void *primary)
+{
+	return bt_hog_new(-1, name, vendor, product, version, primary);
+}
+
+struct bt_hog *bt_hog_new(int fd, const char *name, uint16_t vendor,
+					uint16_t product, uint16_t version,
+					void *primary)
 {
 	struct bt_hog *hog;
 
@@ -1180,15 +1189,17 @@ struct bt_hog *bt_hog_new(const char *name, uint16_t vendor, uint16_t product,
 		return NULL;
 
 	hog->gatt_op = queue_new();
-	if (!hog->gatt_op) {
-		hog_free(hog);
-		return NULL;
-	}
+	hog->bas = queue_new();
 
-	hog->uhid = bt_uhid_new_default();
-	if (!hog->uhid) {
+	if (fd < 0)
+		hog->uhid = bt_uhid_new_default();
+	else
+		hog->uhid = bt_uhid_new(fd);
+
+	hog->uhid_fd = fd;
+
+	if (!hog->gatt_op || !hog->bas || !hog->uhid) {
 		hog_free(hog);
-		queue_destroy(hog->gatt_op, NULL);
 		return NULL;
 	}
 
@@ -1227,16 +1238,11 @@ void bt_hog_unref(struct bt_hog *hog)
 static void find_included_cb(uint8_t status, GSList *services, void *user_data)
 {
 	struct gatt_request *req = user_data;
-	struct bt_hog *hog = req->user_data;
-	struct gatt_included *include;
 	GSList *l;
 
 	DBG("");
 
 	destroy_gatt_req(req);
-
-	if (hog->primary)
-		return;
 
 	if (status) {
 		const char *str = att_ecode2str(status);
@@ -1244,37 +1250,12 @@ static void find_included_cb(uint8_t status, GSList *services, void *user_data)
 		return;
 	}
 
-	if (!services) {
-		DBG("No included service found");
-		return;
-	}
-
 	for (l = services; l; l = l->next) {
-		include = l->data;
+		struct gatt_included *include = l->data;
 
-		if (strcmp(include->uuid, HOG_UUID) == 0)
-			break;
+		DBG("included: handle %x, uuid %s",
+			include->handle, include->uuid);
 	}
-
-	if (!l) {
-		for (l = services; l; l = l->next) {
-			include = l->data;
-
-			find_included(hog, hog->attrib,
-					include->range.start,
-					include->range.end, find_included_cb,
-					hog);
-		}
-		return;
-	}
-
-	hog->primary = g_new0(struct gatt_primary, 1);
-	memcpy(hog->primary->uuid, include->uuid, sizeof(include->uuid));
-	memcpy(&hog->primary->range, &include->range, sizeof(include->range));
-
-	discover_char(hog, hog->attrib, hog->primary->range.start,
-						hog->primary->range.end, NULL,
-						char_discovered_cb, hog);
 }
 
 static void hog_attach_scpp(struct bt_hog *hog, struct gatt_primary *primary)
@@ -1315,14 +1296,14 @@ static void hog_attach_dis(struct bt_hog *hog, struct gatt_primary *primary)
 
 static void hog_attach_bas(struct bt_hog *hog, struct gatt_primary *primary)
 {
-	if (hog->bas) {
-		bt_bas_attach(hog->bas, hog->attrib);
-		return;
-	}
+	struct bt_bas *instance;
 
-	hog->bas = bt_bas_new(primary);
-	if (hog->bas)
-		bt_bas_attach(hog->bas, hog->attrib);
+	instance = bt_bas_new(primary);
+	if (!instance)
+		return;
+
+	bt_bas_attach(instance, hog->attrib);
+	queue_push_head(hog->bas, instance);
 }
 
 static void hog_attach_hog(struct bt_hog *hog, struct gatt_primary *primary)
@@ -1334,13 +1315,18 @@ static void hog_attach_hog(struct bt_hog *hog, struct gatt_primary *primary)
 		discover_char(hog, hog->attrib, primary->range.start,
 						primary->range.end, NULL,
 						char_discovered_cb, hog);
+		find_included(hog, hog->attrib, primary->range.start,
+				primary->range.end, find_included_cb, hog);
 		return;
 	}
 
-	instance = bt_hog_new(hog->name, hog->vendor, hog->product,
-							hog->version, primary);
+	instance = bt_hog_new(hog->uhid_fd, hog->name, hog->vendor,
+					hog->product, hog->version, primary);
 	if (!instance)
 		return;
+
+	find_included(instance, hog->attrib, primary->range.start,
+			primary->range.end, find_included_cb, instance);
 
 	bt_hog_attach(instance, hog->attrib);
 	hog->instances = g_slist_append(hog->instances, instance);
@@ -1389,16 +1375,6 @@ static void primary_cb(uint8_t status, GSList *services, void *user_data)
 		if (strcmp(primary->uuid, HOG_UUID) == 0)
 			hog_attach_hog(hog, primary);
 	}
-
-	if (hog->primary)
-		return;
-
-	for (l = services; l; l = l->next) {
-		primary = l->data;
-
-		find_included(hog, hog->attrib, primary->range.start,
-				primary->range.end, find_included_cb, hog);
-	}
 }
 
 bool bt_hog_attach(struct bt_hog *hog, void *gatt)
@@ -1422,8 +1398,7 @@ bool bt_hog_attach(struct bt_hog *hog, void *gatt)
 	if (hog->dis)
 		bt_dis_attach(hog->dis, gatt);
 
-	if (hog->bas)
-		bt_bas_attach(hog->bas, gatt);
+	queue_foreach(hog->bas, (void *) bt_bas_attach, gatt);
 
 	for (l = hog->instances; l; l = l->next) {
 		struct bt_hog *instance = l->data;
@@ -1457,6 +1432,8 @@ void bt_hog_detach(struct bt_hog *hog)
 	if (!hog->attrib)
 		return;
 
+	queue_foreach(hog->bas, (void *) bt_bas_detach, NULL);
+
 	for (l = hog->instances; l; l = l->next) {
 		struct bt_hog *instance = l->data;
 
@@ -1477,9 +1454,6 @@ void bt_hog_detach(struct bt_hog *hog)
 
 	if (hog->dis)
 		bt_dis_detach(hog->dis);
-
-	if (hog->bas)
-		bt_bas_detach(hog->bas);
 
 	queue_foreach(hog->gatt_op, (void *) cancel_gatt_req, NULL);
 	g_attrib_unref(hog->attrib);

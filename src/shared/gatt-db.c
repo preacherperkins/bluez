@@ -24,12 +24,13 @@
 #include <stdbool.h>
 #include <errno.h>
 
+#include "lib/bluetooth.h"
 #include "lib/uuid.h"
 #include "src/shared/util.h"
 #include "src/shared/queue.h"
 #include "src/shared/timeout.h"
+#include "src/shared/att.h"
 #include "src/shared/gatt-db.h"
-#include "src/shared/att-types.h"
 
 #ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -37,7 +38,7 @@
 
 #define MAX_CHAR_DECL_VALUE_LEN 19
 #define MAX_INCLUDED_VALUE_LEN 6
-#define ATTRIBUTE_TIMEOUT 1000
+#define ATTRIBUTE_TIMEOUT 5000
 
 static const bt_uuid_t primary_service_uuid = { .type = BT_UUID16,
 					.value.u16 = GATT_PRIM_SVC_UUID };
@@ -108,20 +109,56 @@ struct gatt_db_service {
 	struct gatt_db_attribute **attributes;
 };
 
+static void pending_read_result(struct pending_read *p, int err,
+					const uint8_t *data, size_t length)
+{
+	if (p->timeout_id > 0)
+		timeout_remove(p->timeout_id);
+
+	p->func(p->attrib, err, data, length, p->user_data);
+
+	free(p);
+}
+
+static void pending_read_free(void *data)
+{
+	struct pending_read *p = data;
+
+	pending_read_result(p, -ECANCELED, NULL, 0);
+}
+
+static void pending_write_result(struct pending_write *p, int err)
+{
+	if (p->timeout_id > 0)
+		timeout_remove(p->timeout_id);
+
+	p->func(p->attrib, err, p->user_data);
+
+	free(p);
+}
+
+static void pending_write_free(void *data)
+{
+	struct pending_write *p = data;
+
+	pending_write_result(p, -ECANCELED);
+}
+
 static void attribute_destroy(struct gatt_db_attribute *attribute)
 {
 	/* Attribute was not initialized by user */
 	if (!attribute)
 		return;
 
-	queue_destroy(attribute->pending_reads, free);
-	queue_destroy(attribute->pending_writes, free);
+	queue_destroy(attribute->pending_reads, pending_read_free);
+	queue_destroy(attribute->pending_writes, pending_write_free);
 
 	free(attribute->value);
 	free(attribute);
 }
 
 static struct gatt_db_attribute *new_attribute(struct gatt_db_service *service,
+							uint16_t handle,
 							const bt_uuid_t *type,
 							const uint8_t *val,
 							uint16_t len)
@@ -133,6 +170,7 @@ static struct gatt_db_attribute *new_attribute(struct gatt_db_service *service,
 		return NULL;
 
 	attribute->service = service;
+	attribute->handle = handle;
 	attribute->uuid = *type;
 	attribute->value_len = len;
 	if (len) {
@@ -335,6 +373,7 @@ static bool le_to_uuid(const uint8_t *src, size_t len, bt_uuid_t *uuid)
 }
 
 static struct gatt_db_service *gatt_db_service_create(const bt_uuid_t *uuid,
+							uint16_t handle,
 							bool primary,
 							uint16_t num_handles)
 {
@@ -363,7 +402,8 @@ static struct gatt_db_service *gatt_db_service_create(const bt_uuid_t *uuid,
 
 	len = uuid_to_le(uuid, value);
 
-	service->attributes[0] = new_attribute(service, type, value, len);
+	service->attributes[0] = new_attribute(service, handle, type, value,
+									len);
 	if (!service->attributes[0]) {
 		gatt_db_service_destroy(service);
 		return NULL;
@@ -497,7 +537,7 @@ struct gatt_db_attribute *gatt_db_insert_service(struct gatt_db *db,
 	if (!find_insert_loc(db, handle, handle + num_handles - 1, &after))
 		return NULL;
 
-	service = gatt_db_service_create(uuid, primary, num_handles);
+	service = gatt_db_service_create(uuid, handle, primary, num_handles);
 
 	if (!service)
 		return NULL;
@@ -627,6 +667,78 @@ static void set_attribute_data(struct gatt_db_attribute *attribute,
 	attribute->user_data = user_data;
 }
 
+static struct gatt_db_attribute *
+service_insert_characteristic(struct gatt_db_service *service,
+					uint16_t handle,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					uint8_t properties,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data)
+{
+	uint8_t value[MAX_CHAR_DECL_VALUE_LEN];
+	uint16_t len = 0;
+	int i;
+
+	/* Check if handle is in within service range */
+	if (handle && handle <= service->attributes[0]->handle)
+		return NULL;
+
+	i = get_attribute_index(service, 1);
+	if (!i)
+		return NULL;
+
+	if (!handle)
+		handle = get_handle_at_index(service, i - 1) + 2;
+
+	value[0] = properties;
+	len += sizeof(properties);
+
+	/* We set handle of characteristic value, which will be added next */
+	put_le16(handle, &value[1]);
+	len += sizeof(uint16_t);
+	len += uuid_to_le(uuid, &value[3]);
+
+	service->attributes[i] = new_attribute(service, handle - 1,
+							&characteristic_uuid,
+							value, len);
+	if (!service->attributes[i])
+		return NULL;
+
+	i++;
+
+	service->attributes[i] = new_attribute(service, handle, uuid, NULL, 0);
+	if (!service->attributes[i]) {
+		free(service->attributes[i - 1]);
+		return NULL;
+	}
+
+	set_attribute_data(service->attributes[i], read_func, write_func,
+							permissions, user_data);
+
+	return service->attributes[i];
+}
+
+struct gatt_db_attribute *
+gatt_db_service_insert_characteristic(struct gatt_db_attribute *attrib,
+					uint16_t handle,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					uint8_t properties,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data)
+{
+	if (!attrib || !handle)
+		return NULL;
+
+	return service_insert_characteristic(attrib->service, handle, uuid,
+						permissions, properties,
+						read_func, write_func,
+						user_data);
+}
+
 struct gatt_db_attribute *
 gatt_db_service_add_characteristic(struct gatt_db_attribute *attrib,
 					const bt_uuid_t *uuid,
@@ -636,44 +748,62 @@ gatt_db_service_add_characteristic(struct gatt_db_attribute *attrib,
 					gatt_db_write_t write_func,
 					void *user_data)
 {
-	struct gatt_db_service *service;
-	uint8_t value[MAX_CHAR_DECL_VALUE_LEN];
-	uint16_t len = 0;
-	int i;
-
 	if (!attrib)
 		return NULL;
 
-	service = attrib->service;
+	return service_insert_characteristic(attrib->service, 0, uuid,
+						permissions, properties,
+						read_func, write_func,
+						user_data);
+}
 
-	i = get_attribute_index(service, 1);
+static struct gatt_db_attribute *
+service_insert_descriptor(struct gatt_db_service *service,
+					uint16_t handle,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data)
+{
+	int i;
+
+	i = get_attribute_index(service, 0);
 	if (!i)
 		return NULL;
 
-	value[0] = properties;
-	len += sizeof(properties);
-	/* We set handle of characteristic value, which will be added next */
-	put_le16(get_handle_at_index(service, i - 1) + 2, &value[1]);
-	len += sizeof(uint16_t);
-	len += uuid_to_le(uuid, &value[3]);
+	/* Check if handle is in within service range */
+	if (handle && handle <= service->attributes[0]->handle)
+		return NULL;
 
-	service->attributes[i] = new_attribute(service, &characteristic_uuid,
-								value, len);
+	if (!handle)
+		handle = get_handle_at_index(service, i - 1) + 1;
+
+	service->attributes[i] = new_attribute(service, handle, uuid, NULL, 0);
 	if (!service->attributes[i])
 		return NULL;
-
-	attribute_update(service, i++);
-
-	service->attributes[i] = new_attribute(service, uuid, NULL, 0);
-	if (!service->attributes[i]) {
-		free(service->attributes[i - 1]);
-		return NULL;
-	}
 
 	set_attribute_data(service->attributes[i], read_func, write_func,
 							permissions, user_data);
 
-	return attribute_update(service, i);
+	return service->attributes[i];
+}
+
+struct gatt_db_attribute *
+gatt_db_service_insert_descriptor(struct gatt_db_attribute *attrib,
+					uint16_t handle,
+					const bt_uuid_t *uuid,
+					uint32_t permissions,
+					gatt_db_read_t read_func,
+					gatt_db_write_t write_func,
+					void *user_data)
+{
+	if (!attrib || !handle)
+		return NULL;
+
+	return service_insert_descriptor(attrib->service, handle, uuid,
+					permissions, read_func, write_func,
+					user_data);
 }
 
 struct gatt_db_attribute *
@@ -684,26 +814,12 @@ gatt_db_service_add_descriptor(struct gatt_db_attribute *attrib,
 					gatt_db_write_t write_func,
 					void *user_data)
 {
-	struct gatt_db_service *service;
-	int i;
-
 	if (!attrib)
 		return NULL;
 
-	service = attrib->service;
-
-	i = get_attribute_index(service, 0);
-	if (!i)
-		return NULL;
-
-	service->attributes[i] = new_attribute(service, uuid, NULL, 0);
-	if (!service->attributes[i])
-		return NULL;
-
-	set_attribute_data(service->attributes[i], read_func, write_func,
-							permissions, user_data);
-
-	return attribute_update(service, i);
+	return service_insert_descriptor(attrib->service, 0, uuid,
+					permissions, read_func, write_func,
+					user_data);
 }
 
 struct gatt_db_attribute *
@@ -745,7 +861,7 @@ gatt_db_service_add_included(struct gatt_db_attribute *attrib,
 	if (!index)
 		return NULL;
 
-	service->attributes[index] = new_attribute(service,
+	service->attributes[index] = new_attribute(service, 0,
 							&included_service_uuid,
 							value, len);
 	if (!service->attributes[index])
@@ -858,6 +974,7 @@ struct find_by_type_value_data {
 	void *user_data;
 	const void *value;
 	size_t value_len;
+	unsigned int num_of_res;
 };
 
 static void find_by_type(void *data, void *user_data)
@@ -889,11 +1006,12 @@ static void find_by_type(void *data, void *user_data)
 							search_data->value_len))
 			continue;
 
+		search_data->num_of_res++;
 		search_data->func(attribute, search_data->user_data);
 	}
 }
 
-void gatt_db_find_by_type(struct gatt_db *db, uint16_t start_handle,
+unsigned int gatt_db_find_by_type(struct gatt_db *db, uint16_t start_handle,
 						uint16_t end_handle,
 						const bt_uuid_t *type,
 						gatt_db_attribute_cb_t func,
@@ -910,9 +1028,12 @@ void gatt_db_find_by_type(struct gatt_db *db, uint16_t start_handle,
 	data.user_data = user_data;
 
 	queue_foreach(db->services, find_by_type, &data);
+
+	return data.num_of_res;
 }
 
-void gatt_db_find_by_type_value(struct gatt_db *db, uint16_t start_handle,
+unsigned int gatt_db_find_by_type_value(struct gatt_db *db,
+						uint16_t start_handle,
 						uint16_t end_handle,
 						const bt_uuid_t *type,
 						const void *value,
@@ -931,6 +1052,8 @@ void gatt_db_find_by_type_value(struct gatt_db *db, uint16_t start_handle,
 	data.value_len = value_len;
 
 	queue_foreach(db->services, find_by_type, &data);
+
+	return data.num_of_res;
 }
 
 struct read_by_type_data {
@@ -1141,7 +1264,13 @@ void gatt_db_service_foreach_desc(struct gatt_db_attribute *attrib,
 	service = attrib->service;
 
 	/* Start from the attribute following the value handle */
-	i = attrib->handle - service->attributes[0]->handle + 2;
+	for (i = 0; i < service->num_handles; i++) {
+		if (service->attributes[i] == attrib) {
+			i += 2;
+			break;
+		}
+	}
+
 	for (; i < service->num_handles; i++) {
 		attr = service->attributes[i];
 		if (!attr)
@@ -1170,17 +1299,16 @@ static bool find_service_for_handle(const void *data, const void *user_data)
 	uint16_t handle = PTR_TO_UINT(user_data);
 	uint16_t start, end;
 
-	start = service->attributes[0]->handle;
-	end = start + service->num_handles;
+	gatt_db_service_get_handles(service, &start, &end);
 
-	return (start <= handle) && (handle < end);
+	return (start <= handle) && (handle <= end);
 }
 
 struct gatt_db_attribute *gatt_db_get_attribute(struct gatt_db *db,
 							uint16_t handle)
 {
 	struct gatt_db_service *service;
-	uint16_t service_handle;
+	int i;
 
 	if (!db || !handle)
 		return NULL;
@@ -1190,14 +1318,15 @@ struct gatt_db_attribute *gatt_db_get_attribute(struct gatt_db *db,
 	if (!service)
 		return NULL;
 
-	service_handle = service->attributes[0]->handle;
+	for (i = 0; i < service->num_handles; i++) {
+		if (!service->attributes[i])
+			continue;
 
-	/*
-	 * We can safely get attribute from attributes array with offset,
-	 * because find_service_for_handle() check if given handle is
-	 * in service range.
-	 */
-	return service->attributes[handle - service_handle];
+		if (service->attributes[i]->handle == handle)
+			return service->attributes[i];
+	}
+
+	return NULL;
 }
 
 static bool find_service_with_uuid(const void *data, const void *user_data)
@@ -1403,17 +1532,6 @@ gatt_db_attribute_get_permissions(const struct gatt_db_attribute *attrib)
 	return attrib->permissions;
 }
 
-static void pending_read_result(struct pending_read *p, int err,
-					const uint8_t *data, size_t length)
-{
-	if (p->timeout_id > 0)
-		timeout_remove(p->timeout_id);
-
-	p->func(p->attrib, err, data, length, p->user_data);
-
-	free(p);
-}
-
 static bool read_timeout(void *user_data)
 {
 	struct pending_read *p = user_data;
@@ -1428,7 +1546,7 @@ static bool read_timeout(void *user_data)
 }
 
 bool gatt_db_attribute_read(struct gatt_db_attribute *attrib, uint16_t offset,
-				uint8_t opcode, bdaddr_t *bdaddr,
+				uint8_t opcode, struct bt_att *att,
 				gatt_db_attribute_read_t func, void *user_data)
 {
 	uint8_t *value;
@@ -1452,7 +1570,7 @@ bool gatt_db_attribute_read(struct gatt_db_attribute *attrib, uint16_t offset,
 
 		queue_push_tail(attrib->pending_reads, p);
 
-		attrib->read_func(attrib, p->id, offset, opcode, bdaddr,
+		attrib->read_func(attrib, p->id, offset, opcode, att,
 							attrib->user_data);
 		return true;
 	}
@@ -1498,16 +1616,6 @@ bool gatt_db_attribute_read_result(struct gatt_db_attribute *attrib,
 	return true;
 }
 
-static void pending_write_result(struct pending_write *p, int err)
-{
-	if (p->timeout_id > 0)
-		timeout_remove(p->timeout_id);
-
-	p->func(p->attrib, err, p->user_data);
-
-	free(p);
-}
-
 static bool write_timeout(void *user_data)
 {
 	struct pending_write *p = user_data;
@@ -1523,7 +1631,7 @@ static bool write_timeout(void *user_data)
 
 bool gatt_db_attribute_write(struct gatt_db_attribute *attrib, uint16_t offset,
 					const uint8_t *value, size_t len,
-					uint8_t opcode, bdaddr_t *bdaddr,
+					uint8_t opcode, struct bt_att *att,
 					gatt_db_attribute_write_t func,
 					void *user_data)
 {
@@ -1547,9 +1655,13 @@ bool gatt_db_attribute_write(struct gatt_db_attribute *attrib, uint16_t offset,
 		queue_push_tail(attrib->pending_writes, p);
 
 		attrib->write_func(attrib, p->id, offset, value, len, opcode,
-						bdaddr, attrib->user_data);
+							att, attrib->user_data);
 		return true;
 	}
+
+	/* Nothing to write just skip */
+	if (len == 0)
+		goto done;
 
 	/* For values stored in db allocate on demand */
 	if (!attrib->value || offset >= attrib->value_len ||
@@ -1571,6 +1683,7 @@ bool gatt_db_attribute_write(struct gatt_db_attribute *attrib, uint16_t offset,
 
 	memcpy(&attrib->value[offset], value, len);
 
+done:
 	func(attrib, 0, user_data);
 
 	return true;

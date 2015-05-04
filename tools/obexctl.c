@@ -33,13 +33,14 @@
 #include <signal.h>
 #include <sys/signalfd.h>
 #include <inttypes.h>
+#include <wordexp.h>
 
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <glib.h>
-#include <gdbus.h>
 
-#include <client/display.h>
+#include "gdbus/gdbus.h"
+#include "client/display.h"
 
 /* String display constants */
 #define COLORED_NEW	COLOR_GREEN "NEW" COLOR_OFF
@@ -1232,7 +1233,6 @@ static void list_messages_reply(DBusMessage *message, void *user_data)
 {
 	DBusError error;
 	DBusMessageIter iter, array;
-	int ctype;
 
 	dbus_error_init(&error);
 
@@ -1249,8 +1249,8 @@ static void list_messages_reply(DBusMessage *message, void *user_data)
 
 	dbus_message_iter_recurse(&iter, &array);
 
-	while ((ctype = dbus_message_iter_get_arg_type(&array)) ==
-							DBUS_TYPE_DICT_ENTRY) {
+	while ((dbus_message_iter_get_arg_type(&array)) ==
+						DBUS_TYPE_DICT_ENTRY) {
 		DBusMessageIter entry;
 		const char *obj;
 
@@ -2030,8 +2030,9 @@ static char **cmd_completion(const char *text, int start, int end)
 
 static void rl_handler(char *input)
 {
+	wordexp_t w;
 	int argc;
-	char **argv = NULL;
+	char **argv;
 	int i;
 
 	if (!input) {
@@ -2045,18 +2046,16 @@ static void rl_handler(char *input)
 	if (!strlen(input))
 		goto done;
 
-	g_strstrip(input);
 	add_history(input);
 
-	argv = g_strsplit(input, " ", -1);
-	if (argv == NULL)
+	if (wordexp(input, &w, WRDE_NOCMD))
 		goto done;
 
-	for (argc = 0; argv[argc];)
-		argc++;
+	if (w.we_wordc == 0)
+		goto free_we;
 
-	if (argc == 0)
-		goto done;
+	argv = w.we_wordv;
+	argc = w.we_wordc;
 
 	for (i = 0; cmd_table[i].cmd; i++) {
 		if (strcmp(argv[0], cmd_table[i].cmd))
@@ -2064,13 +2063,13 @@ static void rl_handler(char *input)
 
 		if (cmd_table[i].func) {
 			cmd_table[i].func(argc, argv);
-			goto done;
+			goto free_we;
 		}
 	}
 
 	if (strcmp(argv[0], "help")) {
 		printf("Invalid command\n");
-		goto done;
+		goto free_we;
 	}
 
 	printf("Available commands:\n");
@@ -2083,8 +2082,9 @@ static void rl_handler(char *input)
 					cmd_table[i].desc ? : "");
 	}
 
+free_we:
+	wordfree(&w);
 done:
-	g_strfreev(argv);
 	free(input);
 }
 

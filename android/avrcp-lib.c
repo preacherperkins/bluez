@@ -367,6 +367,10 @@ void avrcp_shutdown(struct avrcp *session)
 			avctp_unregister_passthrough_handler(session->conn,
 						session->passthrough_id);
 
+		if (session->browsing_id > 0)
+			avctp_unregister_browsing_pdu_handler(session->conn,
+							session->browsing_id);
+
 		/* clear destroy callback that would call shutdown again */
 		avctp_set_destroy_cb(session->conn, NULL, NULL);
 		avctp_shutdown(session->conn);
@@ -2443,8 +2447,12 @@ static int parse_attribute_list(uint8_t *params, uint16_t params_len,
 
 		if (item->len > 0) {
 			text[i] = g_strndup(item->data, item->len);
+			attrs[i] = item->attr;
 			params_len -= item->len;
 			params += item->len;
+		} else {
+			text[i] = NULL;
+			attrs[i] = 0;
 		}
 	}
 
@@ -2455,6 +2463,12 @@ fail:
 		g_free(text[i]);
 
 	return -EPROTO;
+}
+
+static void free_attribute_list(uint8_t number, char **text)
+{
+	while(number--)
+		g_free(text[number]);
 }
 
 static int parse_elements(struct avrcp_header *pdu, uint8_t *number,
@@ -2530,6 +2544,9 @@ static gboolean get_element_attributes_rsp(struct avctp *conn,
 done:
 	player->cfm->get_element_attributes(session, err, number, attrs, text,
 							player->user_data);
+
+	if (err == 0)
+		free_attribute_list(number, text);
 
 	return FALSE;
 }
@@ -2854,6 +2871,9 @@ static gboolean get_item_attributes_rsp(struct avctp *conn, uint8_t *operands,
 done:
 	player->cfm->get_item_attributes(session, err, number, attrs, text,
 							player->user_data);
+
+	if (err == 0)
+		free_attribute_list(number, text);
 
 	return FALSE;
 }

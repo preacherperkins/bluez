@@ -121,6 +121,7 @@ static struct {
 	DBG_CB(CB_GATTS_REQUEST_WRITE),
 	DBG_CB(CB_GATTS_REQUEST_EXEC_WRITE),
 	DBG_CB(CB_GATTS_RESPONSE_CONFIRMATION),
+	DBG_CB(CB_GATTS_INDICATION_SEND),
 
 	/* Map client */
 	DBG_CB(CB_MAP_CLIENT_REMOTE_MAS_INSTANCES),
@@ -134,6 +135,7 @@ static struct {
 	DBG_CB(CB_EMU_VALUE_NOTIFICATION),
 	DBG_CB(CB_EMU_READ_RESPONSE),
 	DBG_CB(CB_EMU_WRITE_RESPONSE),
+	DBG_CB(CB_EMU_ATT_ERROR),
 };
 
 static gboolean check_callbacks_called(gpointer user_data)
@@ -1033,6 +1035,13 @@ static bool match_data(struct step *step)
 				step->callback_result.mas_instances,
 				step->callback_result.num_mas_instances)) {
 		tester_debug("Mas instances don't match");
+		return false;
+	}
+
+	if (exp->callback_result.error != step->callback_result.error) {
+		tester_debug("Err mismatch: %d vs %d",
+				exp->callback_result.error,
+				step->callback_result.error);
 		return false;
 	}
 
@@ -1992,6 +2001,18 @@ static void gatts_request_write_cb(int conn_id, int trans_id, bt_bdaddr_t *bda,
 	schedule_callback_verification(step);
 }
 
+static void gatts_indication_send_cb(int conn_id, int status)
+{
+	struct step *step = g_new0(struct step, 1);
+
+	step->callback = CB_GATTS_INDICATION_SEND;
+
+	step->callback_result.conn_id = conn_id;
+	step->callback_result.status = status;
+
+	schedule_callback_verification(step);
+}
+
 static const btgatt_server_callbacks_t btgatt_server_callbacks = {
 	.register_server_cb = gatts_register_server_cb,
 	.connection_cb = gatts_connection_cb,
@@ -2005,7 +2026,9 @@ static const btgatt_server_callbacks_t btgatt_server_callbacks = {
 	.request_read_cb = gatts_request_read_cb,
 	.request_write_cb = gatts_request_write_cb,
 	.request_exec_write_cb = NULL,
-	.response_confirmation_cb = NULL
+	.response_confirmation_cb = NULL,
+	.indication_sent_cb = gatts_indication_send_cb,
+	.congestion_cb = NULL,
 };
 
 static const btgatt_callbacks_t btgatt_callbacks = {

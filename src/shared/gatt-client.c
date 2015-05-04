@@ -22,6 +22,7 @@
  */
 
 #include "src/shared/att.h"
+#include "lib/bluetooth.h"
 #include "lib/uuid.h"
 #include "src/shared/gatt-helpers.h"
 #include "src/shared/util.h"
@@ -76,6 +77,8 @@ struct bt_gatt_client {
 	struct queue *long_write_queue;
 	bool in_long_write;
 
+	unsigned int reliable_write_session_id;
+
 	/* List of registered disconnect/notification/indication callbacks */
 	struct queue *notify_list;
 	struct queue *notify_chrcs;
@@ -88,6 +91,7 @@ struct bt_gatt_client {
 	 * the remote peripheral.
 	 */
 	unsigned int svc_chngd_ind_id;
+	bool svc_chngd_registered;
 	struct queue *svc_chngd_queue;  /* Queued service changed events */
 	bool in_svc_chngd;
 
@@ -98,11 +102,15 @@ struct bt_gatt_client {
 	 */
 	struct queue *pending_requests;
 	unsigned int next_request_id;
+
+	struct bt_gatt_request *discovery_req;
+	unsigned int mtu_req_id;
 };
 
 struct request {
 	struct bt_gatt_client *client;
 	bool long_write;
+	bool prep_write;
 	bool removed;
 	int ref_count;
 	unsigned int id;
@@ -234,12 +242,6 @@ static struct notify_chrc *notify_chrc_create(struct bt_gatt_client *client,
 							&properties, NULL))
 			return NULL;
 
-	/* Find the CCC characteristic */
-	ccc = NULL;
-	gatt_db_service_foreach_desc(attr, find_ccc, &ccc);
-	if (!ccc)
-		return NULL;
-
 	chrc = new0(struct notify_chrc, 1);
 	if (!chrc)
 		return NULL;
@@ -250,8 +252,17 @@ static struct notify_chrc *notify_chrc_create(struct bt_gatt_client *client,
 		return NULL;
 	}
 
+	/*
+	 * Find the CCC characteristic. Some characteristics that allow
+	 * notifications may not have a CCC descriptor. We treat these as
+	 * automatically successful.
+	 */
+	ccc = NULL;
+	gatt_db_service_foreach_desc(attr, find_ccc, &ccc);
+	if (ccc)
+		chrc->ccc_handle = gatt_db_attribute_get_handle(ccc);
+
 	chrc->value_handle = value_handle;
-	chrc->ccc_handle = gatt_db_attribute_get_handle(ccc);
 	chrc->properties = properties;
 
 	queue_push_tail(client->notify_chrcs, chrc);
@@ -410,6 +421,15 @@ static void discovery_op_unref(void *data)
 	discovery_op_free(op);
 }
 
+static void discovery_req_clear(struct bt_gatt_client *client)
+{
+	if (!client->discovery_req)
+		return;
+
+	bt_gatt_request_unref(client->discovery_req);
+	client->discovery_req = NULL;
+}
+
 static void discover_chrcs_cb(bool success, uint8_t att_ecode,
 						struct bt_gatt_result *result,
 						void *user_data);
@@ -426,6 +446,8 @@ static void discover_incl_cb(bool success, uint8_t att_ecode,
 	bt_uuid_t uuid;
 	char uuid_str[MAX_LEN_UUID_STR];
 	unsigned int includes_count, i;
+
+	discovery_req_clear(client);
 
 	if (!success) {
 		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND)
@@ -503,11 +525,14 @@ next:
 			goto failed;
 
 		op->cur_svc = attr;
-		if (bt_gatt_discover_characteristics(client->att,
+
+		client->discovery_req = bt_gatt_discover_characteristics(
+							client->att,
 							start, end,
 							discover_chrcs_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+		if (client->discovery_req)
 			return;
 
 		util_debug(client->debug_callback, client->debug_data,
@@ -521,10 +546,15 @@ next:
 	if (!gatt_db_attribute_get_service_handles(attr, &start, &end))
 		goto failed;
 
-	if (bt_gatt_discover_included_services(client->att, start, end,
+	if (start == end)
+		goto next;
+
+	client->discovery_req = bt_gatt_discover_included_services(client->att,
+							start, end,
 							discover_incl_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -558,7 +588,8 @@ static bool discover_descs(struct discovery_op *op, bool *discovering)
 	*discovering = false;
 
 	while ((chrc_data = queue_pop_head(op->pending_chrcs))) {
-		attr = gatt_db_service_add_characteristic(op->cur_svc,
+		attr = gatt_db_service_insert_characteristic(op->cur_svc,
+							chrc_data->value_handle,
 							&chrc_data->uuid, 0,
 							chrc_data->properties,
 							NULL, NULL, NULL);
@@ -577,11 +608,13 @@ static bool discover_descs(struct discovery_op *op, bool *discovering)
 			continue;
 		}
 
-		if (bt_gatt_discover_descriptors(client->att, desc_start,
+		client->discovery_req = bt_gatt_discover_descriptors(
+							client->att, desc_start,
 							chrc_data->end_handle,
 							discover_descs_cb,
 							discovery_op_ref(op),
-							discovery_op_unref)) {
+							discovery_op_unref);
+		if (client->discovery_req) {
 			*discovering = true;
 			goto done;
 		}
@@ -617,6 +650,8 @@ static void discover_descs_cb(bool success, uint8_t att_ecode,
 	unsigned int desc_count;
 	bool discovering;
 
+	discovery_req_clear(client);
+
 	if (!success) {
 		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND) {
 			success = true;
@@ -645,8 +680,9 @@ static void discover_descs_cb(bool success, uint8_t att_ecode,
 						"handle: 0x%04x, uuid: %s",
 						handle, uuid_str);
 
-		attr = gatt_db_service_add_descriptor(op->cur_svc, &uuid, 0,
-							NULL, NULL, NULL);
+		attr = gatt_db_service_insert_descriptor(op->cur_svc, handle,
+							&uuid, 0, NULL, NULL,
+							NULL);
 		if (!attr)
 			goto failed;
 
@@ -654,13 +690,13 @@ static void discover_descs_cb(bool success, uint8_t att_ecode,
 			goto failed;
 	}
 
+next:
 	if (!discover_descs(op, &discovering))
 		goto failed;
 
 	if (discovering)
 		return;
 
-next:
 	/* Done with the current service */
 	gatt_db_service_set_active(op->cur_svc, true);
 
@@ -671,12 +707,18 @@ next:
 	if (!gatt_db_attribute_get_service_handles(attr, &start, &end))
 		goto failed;
 
+	if (start == end)
+		goto next;
+
 	/* Move on to the next service */
 	op->cur_svc = attr;
-	if (bt_gatt_discover_characteristics(client->att, start, end,
+
+	client->discovery_req = bt_gatt_discover_characteristics(client->att,
+							start, end,
 							discover_chrcs_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -707,6 +749,8 @@ static void discover_chrcs_cb(bool success, uint8_t att_ecode,
 	char uuid_str[MAX_LEN_UUID_STR];
 	unsigned int chrc_count;
 	bool discovering;
+
+	discovery_req_clear(client);
 
 	if (!success) {
 		if (att_ecode == BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND) {
@@ -772,12 +816,18 @@ next:
 	if (!gatt_db_attribute_get_service_handles(attr, &start, &end))
 		goto failed;
 
+	if (start == end)
+		goto next;
+
 	/* Move on to the next service */
 	op->cur_svc = attr;
-	if (bt_gatt_discover_characteristics(client->att, start, end,
+
+	client->discovery_req = bt_gatt_discover_characteristics(client->att,
+							start, end,
 							discover_chrcs_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -804,6 +854,8 @@ static void discover_secondary_cb(bool success, uint8_t att_ecode,
 	uint128_t u128;
 	bt_uuid_t uuid;
 	char uuid_str[MAX_LEN_UUID_STR];
+
+	discovery_req_clear(client);
 
 	if (!success) {
 		util_debug(client->debug_callback, client->debug_data,
@@ -869,10 +921,12 @@ next:
 		goto done;
 	}
 
-	if (bt_gatt_discover_included_services(client->att, start, end,
+	client->discovery_req = bt_gatt_discover_included_services(client->att,
+							start, end,
 							discover_incl_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -897,11 +951,13 @@ static void discover_primary_cb(bool success, uint8_t att_ecode,
 	bt_uuid_t uuid;
 	char uuid_str[MAX_LEN_UUID_STR];
 
+	discovery_req_clear(client);
+
 	if (!success) {
 		util_debug(client->debug_callback, client->debug_data,
 					"Primary service discovery failed."
 					" ATT ECODE: 0x%02x", att_ecode);
-		goto done;
+		goto secondary;
 	}
 
 	if (!result || !bt_gatt_iter_init(&iter, result)) {
@@ -934,12 +990,14 @@ static void discover_primary_cb(bool success, uint8_t att_ecode,
 		queue_push_tail(op->pending_svcs, attr);
 	}
 
+secondary:
 	/* Discover secondary services */
-	if (bt_gatt_discover_secondary_services(client->att, NULL,
-							op->start, op->end,
-							discover_secondary_cb,
-							discovery_op_ref(op),
-							discovery_op_unref))
+	client->discovery_req = bt_gatt_discover_secondary_services(client->att,
+						NULL, op->start, op->end,
+						discover_secondary_cb,
+						discovery_op_ref(op),
+						discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -969,6 +1027,7 @@ static void exchange_mtu_cb(bool success, uint8_t att_ecode, void *user_data)
 	struct bt_gatt_client *client = op->client;
 
 	op->success = success;
+	client->mtu_req_id = 0;
 
 	if (!success) {
 		util_debug(client->debug_callback, client->debug_data,
@@ -991,10 +1050,12 @@ static void exchange_mtu_cb(bool success, uint8_t att_ecode, void *user_data)
 		return;
 	}
 
-	if (bt_gatt_discover_all_primary_services(client->att, NULL,
+	client->discovery_req = bt_gatt_discover_all_primary_services(
+							client->att, NULL,
 							discover_primary_cb,
 							discovery_op_ref(op),
-							discovery_op_unref))
+							discovery_op_unref);
+	if (client->discovery_req)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
@@ -1020,6 +1081,7 @@ static void service_changed_reregister_cb(uint16_t att_ecode, void *user_data)
 		util_debug(client->debug_callback, client->debug_data,
 			"Re-registered handler for \"Service Changed\" after "
 			"change in GATT service");
+		client->svc_chngd_registered = true;
 		return;
 	}
 
@@ -1089,6 +1151,7 @@ static void service_changed_complete(struct discovery_op *op, bool success,
 	/* The GATT service was modified. Re-register the handler for
 	 * indications from the "Service Changed" characteristic.
 	 */
+	client->svc_chngd_registered = false;
 	client->svc_chngd_ind_id = bt_gatt_client_register_notify(client,
 					gatt_db_attribute_get_handle(attr),
 					service_changed_reregister_cb,
@@ -1103,7 +1166,9 @@ static void service_changed_complete(struct discovery_op *op, bool success,
 
 static void service_changed_failure(struct discovery_op *op)
 {
-	gatt_db_clear_range(op->client->db, op->start, op->end);
+	struct bt_gatt_client *client = op->client;
+
+	gatt_db_clear_range(client->db, op->start, op->end);
 }
 
 static void process_service_changed(struct bt_gatt_client *client,
@@ -1129,11 +1194,12 @@ static void process_service_changed(struct bt_gatt_client *client,
 	if (!op)
 		goto fail;
 
-	if (bt_gatt_discover_primary_services(client->att, NULL,
-						start_handle, end_handle,
+	client->discovery_req = bt_gatt_discover_primary_services(client->att,
+						NULL, start_handle, end_handle,
 						discover_primary_cb,
 						discovery_op_ref(op),
-						discovery_op_unref)) {
+						discovery_op_unref);
+	if (client->discovery_req) {
 		client->in_svc_chngd = true;
 		return;
 	}
@@ -1197,6 +1263,7 @@ static void service_changed_register_cb(uint16_t att_ecode, void *user_data)
 		goto done;
 	}
 
+	client->svc_chngd_registered = true;
 	client->ready = true;
 	success = true;
 	util_debug(client->debug_callback, client->debug_data,
@@ -1239,13 +1306,16 @@ static void init_complete(struct discovery_op *op, bool success,
 					service_changed_register_cb,
 					service_changed_cb,
 					client, NULL);
-	client->ready = false;
+
+	if (!client->svc_chngd_registered)
+		client->ready = false;
 
 	if (client->svc_chngd_ind_id)
 		return;
 
 	util_debug(client->debug_callback, client->debug_data,
 			"Failed to register handler for \"Service Changed\"");
+	success = false;
 
 fail:
 	util_debug(client->debug_callback, client->debug_data,
@@ -1259,7 +1329,9 @@ done:
 
 static void init_fail(struct discovery_op *op)
 {
-	gatt_db_clear(op->client->db);
+	struct bt_gatt_client *client = op->client;
+
+	gatt_db_clear(client->db);
 }
 
 static bool gatt_client_init(struct bt_gatt_client *client, uint16_t mtu)
@@ -1275,10 +1347,12 @@ static bool gatt_client_init(struct bt_gatt_client *client, uint16_t mtu)
 		return false;
 
 	/* Configure the MTU */
-	if (!bt_gatt_exchange_mtu(client->att, MAX(BT_ATT_DEFAULT_LE_MTU, mtu),
-							exchange_mtu_cb,
-							discovery_op_ref(op),
-							discovery_op_unref)) {
+	client->mtu_req_id = bt_gatt_exchange_mtu(client->att,
+						MAX(BT_ATT_DEFAULT_LE_MTU, mtu),
+						exchange_mtu_cb,
+						discovery_op_ref(op),
+						discovery_op_unref);
+	if (!client->mtu_req_id) {
 		discovery_op_free(op);
 		return false;
 	}
@@ -1423,18 +1497,17 @@ static void complete_unregister_notify(void *data)
 	 */
 	if (notify_data->att_id) {
 		bt_att_cancel(notify_data->client->att, notify_data->att_id);
-		notify_data_unref(notify_data);
-		return;
+		goto done;
 	}
 
-	if (__sync_sub_and_fetch(&notify_data->chrc->notify_count, 1)) {
-		notify_data_unref(notify_data);
-		return;
-	}
+	if (__sync_sub_and_fetch(&notify_data->chrc->notify_count, 1) ||
+						!notify_data->chrc->ccc_handle)
+		goto done;
 
 	if (notify_data_write_ccc(notify_data, false, disable_ccc_callback))
 		return;
 
+done:
 	notify_data_unref(notify_data);
 }
 
@@ -1698,13 +1771,68 @@ static bool match_req_id(const void *a, const void *b)
 static void cancel_long_write_cb(uint8_t opcode, const void *pdu, uint16_t len,
 								void *user_data)
 {
-	/* Do nothing */
+	struct bt_gatt_client *client = user_data;
+
+	if (queue_isempty(client->long_write_queue))
+		client->in_long_write = false;
+}
+
+static bool cancel_long_write_req(struct bt_gatt_client *client,
+							struct request *req)
+{
+	uint8_t pdu = 0x00;
+
+	/*
+	 * att_id == 0 means that request has been queued and no prepare write
+	 * has been sent so far.Let's just remove if from the queue.
+	 * Otherwise execute write needs to be send.
+	 */
+	if (!req->att_id)
+		return queue_remove(client->long_write_queue, req);
+
+	return !!bt_att_send(client->att, BT_ATT_OP_EXEC_WRITE_REQ, &pdu,
+							sizeof(pdu),
+							cancel_long_write_cb,
+							client, NULL);
+
+}
+
+static void cancel_prep_write_cb(uint8_t opcode, const void *pdu, uint16_t len,
+								void *user_data)
+{
+	struct request *req = user_data;
+	struct bt_gatt_client *client = req->client;
+
+	client->reliable_write_session_id = 0;
+}
+
+static bool cancel_prep_write_session(struct bt_gatt_client *client,
+							struct request *req)
+{
+	uint8_t pdu = 0x00;
+
+	return !!bt_att_send(client->att, BT_ATT_OP_EXEC_WRITE_REQ, &pdu,
+							sizeof(pdu),
+							cancel_prep_write_cb,
+							req, request_unref);
+}
+
+static bool cancel_request(struct request *req)
+{
+	req->removed = true;
+
+	if (req->long_write)
+		return cancel_long_write_req(req->client, req);
+
+	if (req->prep_write)
+		return cancel_prep_write_session(req->client, req);
+
+	return bt_att_cancel(req->client->att, req->att_id);
 }
 
 bool bt_gatt_client_cancel(struct bt_gatt_client *client, unsigned int id)
 {
 	struct request *req;
-	uint8_t pdu = 0x00;
 
 	if (!client || !id || !client->att)
 		return false;
@@ -1714,50 +1842,7 @@ bool bt_gatt_client_cancel(struct bt_gatt_client *client, unsigned int id)
 	if (!req)
 		return false;
 
-	req->removed = true;
-
-	if (!bt_att_cancel(client->att, req->att_id) && !req->long_write)
-		return false;
-
-	/* If this was a long-write, we need to abort all prepared writes */
-	if (!req->long_write)
-		return true;
-
-	if (!req->att_id)
-		queue_remove(client->long_write_queue, req);
-	else
-		bt_att_send(client->att, BT_ATT_OP_EXEC_WRITE_REQ,
-							&pdu, sizeof(pdu),
-							cancel_long_write_cb,
-							NULL, NULL);
-
-	if (queue_isempty(client->long_write_queue))
-		client->in_long_write = false;
-
-	return true;
-}
-
-static void cancel_request(void *data)
-{
-	struct request *req = data;
-	uint8_t pdu = 0x00;
-
-	req->removed = true;
-	bt_att_cancel(req->client->att, req->att_id);
-
-	if (!req->long_write)
-		return;
-
-	if (!req->att_id)
-		queue_remove(req->client->long_write_queue, req);
-
-	if (queue_isempty(req->client->long_write_queue))
-		req->client->in_long_write = false;
-
-	bt_att_send(req->client->att, BT_ATT_OP_EXEC_WRITE_REQ,
-							&pdu, sizeof(pdu),
-							cancel_long_write_cb,
-							NULL, NULL);
+	return cancel_request(req);
 }
 
 bool bt_gatt_client_cancel_all(struct bt_gatt_client *client)
@@ -1765,7 +1850,17 @@ bool bt_gatt_client_cancel_all(struct bt_gatt_client *client)
 	if (!client || !client->att)
 		return false;
 
-	queue_remove_all(client->pending_requests, NULL, NULL, cancel_request);
+	queue_remove_all(client->pending_requests, NULL, NULL,
+					(queue_destroy_func_t) cancel_request);
+
+	if (client->discovery_req) {
+		bt_gatt_request_cancel(client->discovery_req);
+		bt_gatt_request_unref(client->discovery_req);
+		client->discovery_req = NULL;
+	}
+
+	if (client->mtu_req_id)
+		bt_att_cancel(client->att, client->mtu_req_id);
 
 	return true;
 }
@@ -2102,24 +2197,29 @@ unsigned int bt_gatt_client_write_without_response(
 					const uint8_t *value, uint16_t length) {
 	uint8_t pdu[2 + length];
 	struct request *req;
+	int security;
+	uint8_t op;
 
 	if (!client)
-		return 0;
-
-	/* TODO: Support this once bt_att_send supports signed writes. */
-	if (signed_write)
 		return 0;
 
 	req = request_create(client);
 	if (!req)
 		return 0;
 
+	/* Only use signed write if unencrypted */
+	if (signed_write) {
+		security = bt_att_get_sec_level(client->att);
+		op = security > BT_SECURITY_LOW ?  BT_ATT_OP_WRITE_CMD :
+						BT_ATT_OP_SIGNED_WRITE_CMD;
+	} else
+		op = BT_ATT_OP_WRITE_CMD;
+
 	put_le16(value_handle, pdu);
 	memcpy(pdu + 2, value, length);
 
-	req->att_id = bt_att_send(client->att, BT_ATT_OP_WRITE_CMD,
-							pdu, sizeof(pdu),
-							NULL, NULL, NULL);
+	req->att_id = bt_att_send(client->att, op, pdu, sizeof(pdu), NULL, req,
+								request_unref);
 	if (!req->att_id) {
 		request_unref(req);
 		return 0;
@@ -2129,6 +2229,7 @@ unsigned int bt_gatt_client_write_without_response(
 }
 
 struct write_op {
+	struct bt_gatt_client *client;
 	bt_gatt_client_callback_t callback;
 	void *user_data;
 	bt_gatt_destroy_func_t destroy;
@@ -2481,7 +2582,7 @@ unsigned int bt_gatt_client_write_long_value(struct bt_gatt_client *client,
 	req->destroy = long_write_op_free;
 	req->long_write = true;
 
-	if (client->in_long_write) {
+	if (client->in_long_write || client->reliable_write_session_id > 0) {
 		queue_push_tail(client->long_write_queue, req);
 		return req->id;
 	}
@@ -2512,6 +2613,264 @@ unsigned int bt_gatt_client_write_long_value(struct bt_gatt_client *client,
 	client->in_long_write = true;
 
 	return req->id;
+}
+
+struct prep_write_op {
+	bt_gatt_client_write_long_callback_t callback;
+	void *user_data;
+	bt_gatt_destroy_func_t destroy;
+	uint8_t *pdu;
+	uint16_t pdu_len;
+};
+
+static void destroy_prep_write_op(void *data)
+{
+	struct prep_write_op *op = data;
+
+	if (op->destroy)
+		op->destroy(op->user_data);
+
+	free(op->pdu);
+	free(op);
+}
+
+static void prep_write_cb(uint8_t opcode, const void *pdu, uint16_t length,
+								void *user_data)
+{
+	struct request *req = user_data;
+	struct prep_write_op *op = req->data;
+	bool success;
+	uint8_t att_ecode;
+	bool reliable_error;
+
+	if (opcode == BT_ATT_OP_ERROR_RSP) {
+		success = false;
+		reliable_error = false;
+		att_ecode = process_error(pdu, length);
+		goto done;
+	}
+
+	if (opcode != BT_ATT_OP_PREP_WRITE_RSP) {
+		success = false;
+		reliable_error = false;
+		att_ecode = 0;
+		goto done;
+	}
+
+	if (!pdu || length != op->pdu_len ||
+					memcmp(pdu, op->pdu, op->pdu_len)) {
+		success = false;
+		reliable_error = true;
+		att_ecode = 0;
+		goto done;
+	}
+
+	success = true;
+	reliable_error = false;
+	att_ecode = 0;
+
+done:
+	if (op->callback)
+		op->callback(success, reliable_error, att_ecode, op->user_data);
+}
+
+static struct request *get_reliable_request(struct bt_gatt_client *client,
+							unsigned int id)
+{
+	struct request *req;
+	struct prep_write_op *op;
+
+	op = new0(struct prep_write_op, 1);
+	if (!op)
+		return NULL;
+
+	/* Following prepare writes */
+	if (id != 0)
+		req = queue_find(client->pending_requests, match_req_id,
+							UINT_TO_PTR(id));
+	else
+		req = request_create(client);
+
+	if (!req) {
+		free(op);
+		return NULL;
+	}
+
+	req->data = op;
+
+	return req;
+}
+
+unsigned int bt_gatt_client_prepare_write(struct bt_gatt_client *client,
+				unsigned int id, uint16_t value_handle,
+				uint16_t offset, const uint8_t *value,
+				uint16_t length,
+				bt_gatt_client_write_long_callback_t callback,
+				void *user_data,
+				bt_gatt_client_destroy_func_t destroy)
+{
+	struct request *req;
+	struct prep_write_op *op;
+	uint8_t pdu[4 + length];
+
+	if (!client)
+		return 0;
+
+	if (client->in_long_write)
+		return 0;
+
+	/*
+	 * Make sure that client who owns reliable session continues with
+	 * prepare writes or this is brand new reliable session (id == 0)
+	 */
+	if (id != client->reliable_write_session_id) {
+		util_debug(client->debug_callback, client->debug_data,
+			"There is other reliable write session ongoing %u",
+			client->reliable_write_session_id);
+
+		return 0;
+	}
+
+	req = get_reliable_request(client, id);
+	if (!req)
+		return 0;
+
+	op = (struct prep_write_op *)req->data;
+
+	op->callback = callback;
+	op->user_data = user_data;
+	op->destroy = destroy;
+
+	req->destroy = destroy_prep_write_op;
+	req->prep_write = true;
+
+	put_le16(value_handle, pdu);
+	put_le16(offset, pdu + 2);
+	memcpy(pdu + 4, value, length);
+
+	/*
+	 * Before sending command we need to remember pdu as we need to validate
+	 * it in the response. Store handle, offset and value. Therefore
+	 * increase length by 4 (handle + offset) as we need it in couple places
+	 * below
+	 */
+	length += 4;
+
+	op->pdu = malloc(length);
+	if (!op->pdu) {
+		op->destroy = NULL;
+		request_unref(req);
+		return 0;
+	}
+
+	memcpy(op->pdu, pdu, length);
+	op->pdu_len = length;
+
+	/*
+	 * Now we are ready to send command
+	 * Note that request_unref will be done on write execute
+	 */
+	req->att_id = bt_att_send(client->att, BT_ATT_OP_PREP_WRITE_REQ, pdu,
+					sizeof(pdu), prep_write_cb, req,
+					NULL);
+	if (!req->att_id) {
+		op->destroy = NULL;
+		request_unref(req);
+		return 0;
+	}
+
+	/*
+	 * Store first request id for prepare write and treat it as a session id
+	 * valid until write execute is done
+	 */
+	if (client->reliable_write_session_id == 0)
+		client->reliable_write_session_id = req->id;
+
+	return client->reliable_write_session_id;
+}
+
+static void exec_write_cb(uint8_t opcode, const void *pdu, uint16_t length,
+								void *user_data)
+{
+	struct request *req = user_data;
+	struct write_op *op = req->data;
+	bool success;
+	uint8_t att_ecode;
+
+	if (opcode == BT_ATT_OP_ERROR_RSP) {
+		success = false;
+		att_ecode = process_error(pdu, length);
+		goto done;
+	}
+
+	if (opcode != BT_ATT_OP_EXEC_WRITE_RSP || pdu || length) {
+		success = false;
+		att_ecode = 0;
+		goto done;
+	}
+
+	success = true;
+	att_ecode = 0;
+
+done:
+	if (op->callback)
+		op->callback(success, att_ecode, op->user_data);
+
+	op->client->reliable_write_session_id = 0;
+
+	start_next_long_write(op->client);
+}
+
+unsigned int bt_gatt_client_write_execute(struct bt_gatt_client *client,
+					unsigned int id,
+					bt_gatt_client_callback_t callback,
+					void *user_data,
+					bt_gatt_client_destroy_func_t destroy)
+{
+	struct request *req;
+	struct write_op *op;
+	uint8_t pdu;
+
+	if (!client)
+		return 0;
+
+	if (client->in_long_write)
+		return 0;
+
+	if (client->reliable_write_session_id != id)
+		return 0;
+
+	op = new0(struct write_op, 1);
+	if (!op)
+		return 0;
+
+	req = queue_find(client->pending_requests, match_req_id,
+							UINT_TO_PTR(id));
+	if (!req) {
+		free(op);
+		return 0;
+	}
+
+	op->client = client;
+	op->callback = callback;
+	op->user_data = user_data;
+	op->destroy = destroy;
+
+	pdu = 0x01;
+
+	req->data = op;
+	req->destroy = destroy_write_op;
+
+	req->att_id = bt_att_send(client->att, BT_ATT_OP_EXEC_WRITE_REQ, &pdu,
+						sizeof(pdu), exec_write_cb,
+						req, request_unref);
+	if (!req->att_id) {
+		op->destroy = NULL;
+		request_unref(req);
+		return 0;
+	}
+
+	return id;
 }
 
 static bool match_notify_chrc_value_handle(const void *a, const void *b)
@@ -2571,9 +2930,7 @@ unsigned int bt_gatt_client_register_notify(struct bt_gatt_client *client,
 	/* Add the handler to the bt_gatt_client's general list */
 	queue_push_tail(client->notify_list, notify_data);
 
-	/* Assign an ID to the handler and notify the caller that it was
-	 * successfully registered.
-	 */
+	/* Assign an ID to the handler. */
 	if (client->next_reg_id < 1)
 		client->next_reg_id = 1;
 
@@ -2591,7 +2948,7 @@ unsigned int bt_gatt_client_register_notify(struct bt_gatt_client *client,
 	/*
 	 * If the ref count is not zero, then notifications are already enabled.
 	 */
-	if (chrc->notify_count > 0) {
+	if (chrc->notify_count > 0 || !chrc->ccc_handle) {
 		complete_notify_request(notify_data);
 		return notify_data->id;
 	}
@@ -2624,4 +2981,21 @@ bool bt_gatt_client_unregister_notify(struct bt_gatt_client *client,
 
 	complete_unregister_notify(notify_data);
 	return true;
+}
+
+bool bt_gatt_client_set_sec_level(struct bt_gatt_client *client,
+								int level)
+{
+	if (!client)
+		return false;
+
+	return bt_att_set_sec_level(client->att, level);
+}
+
+int bt_gatt_client_get_sec_level(struct bt_gatt_client *client)
+{
+	if (!client)
+		return -1;
+
+	return bt_att_get_sec_level(client->att);
 }

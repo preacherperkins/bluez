@@ -32,19 +32,20 @@
 #include <syslog.h>
 
 #include <glib.h>
-#include <gdbus/gdbus.h>
 
-#include "log.h"
+#include "gdbus/gdbus.h"
+
+#include "obexd/src/log.h"
+#include "obexd/src/manager.h"
 #include "transfer.h"
 #include "session.h"
-#include "manager.h"
 #include "bluetooth.h"
 #include "opp.h"
 #include "ftp.h"
 #include "pbap.h"
 #include "sync.h"
 #include "map.h"
-#include "obexd/src/manager.h"
+#include "manager.h"
 
 #define CLIENT_INTERFACE	"org.bluez.obex.Client1"
 #define ERROR_INTERFACE		"org.bluez.obex.Error"

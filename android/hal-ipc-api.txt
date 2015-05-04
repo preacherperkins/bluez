@@ -2329,6 +2329,11 @@ Notifications:
 		Notification parameters: Connection ID (4 octets)
 		                         Congested (1 octet)
 
+	Opcode 0xb0 - Server MTU Changed notification
+
+		Notification parameters: Connection ID (4 octets)
+		                         MTU (4 octets)
+
 
 Bluetooth Handsfree Client HAL (ID 10)
 ======================================
@@ -2473,8 +2478,9 @@ Notifications:
 
 		Valid State values: 0x00 = Disconnected
 		                    0x01 = Connecting
-		                    0x02 = SLC Connected
-		                    0x03 = Disconnecting
+		                    0x02 = Connected
+		                    0x03 = SLC Connected
+		                    0x04 = Disconnecting
 
 		Peer Features is a bitmask of the supported features. Currently
 		available bits:

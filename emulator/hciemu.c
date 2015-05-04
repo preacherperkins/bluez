@@ -36,8 +36,8 @@
 
 #include <glib.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
 
 #include "monitor/bt.h"
 #include "emulator/btdev.h"
@@ -326,6 +326,9 @@ struct hciemu *hciemu_new(enum hciemu_type type)
 		break;
 	case HCIEMU_TYPE_LE:
 		hciemu->btdev_type = BTDEV_TYPE_LE;
+		break;
+	case HCIEMU_TYPE_LEGACY:
+		hciemu->btdev_type = BTDEV_TYPE_BREDR20;
 		break;
 	default:
 		return NULL;
