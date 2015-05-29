@@ -17,6 +17,8 @@
 
 #include <stdbool.h>
 
+#include <string.h>
+
 #include <hardware/bluetooth.h>
 
 #include "../hal-utils.h"
@@ -71,6 +73,68 @@ const btgatt_interface_t *if_gatt = NULL;
 #define VERIFY_STATUS(n, v) VERIFY_INT_ARG(n, v, "No status specified\n")
 #define VERIFY_OFFSET(n, v) VERIFY_INT_ARG(n, v, "No offset specified\n")
 #define VERIFY_TEST_ARG(n, v) VERIFY_INT_ARG(n, v, "No test arg specified\n")
+#define VERIFY_ACTION(n, v) VERIFY_INT_ARG(n, v, "No action specified\n")
+#define VERIFY_FILT_TYPE(n, v) VERIFY_INT_ARG(n, v, "No filter specified\n")
+#define VERIFY_FILT_INDEX(n, v) VERIFY_INT_ARG(n, v, \
+						"No filter index specified\n")
+#define VERIFY_FEAT_SELN(n, v) VERIFY_INT_ARG(n, v, "No feat seln specified\n")
+#define VERIFY_LIST_LOGIC_TYPE(n, v) VERIFY_INT_ARG(n, v, \
+					"No list logic type specified\n")
+#define VERIFY_FILT_LOGIC_TYPE(n, v) VERIFY_INT_ARG(n, v, \
+					"No filt logic type specified\n")
+#define VERIFY_RSSI_HI_THR(n, v) VERIFY_INT_ARG(n, v, \
+					"No rssi hi threshold specified\n")
+#define VERIFY_RSSI_LOW_THR(n, v) VERIFY_INT_ARG(n, v, \
+						"No low threshold specified\n")
+#define VERIFY_DELY_MODE(n, v) VERIFY_INT_ARG(n, v, "No delay mode specified\n")
+#define VERIFY_FND_TIME(n, v) VERIFY_INT_ARG(n, v, "No found time specified\n")
+#define VERIFY_LOST_TIME(n, v) VERIFY_INT_ARG(n, v, "No lost time specified\n")
+#define VERIFY_FND_TIME_CNT(n, v) VERIFY_INT_ARG(n, v, \
+					"No found timer counter specified\n")
+#define VERIFY_COMP_ID(n, v) VERIFY_INT_ARG(n, v, "No company id specified\n")
+#define VERIFY_COMP_ID_MASK(n, v) VERIFY_INT_ARG(n, v, \
+						"No comp. id mask specified\n")
+#define VERIFY_DATA_LEN(n, v) VERIFY_INT_ARG(n, v, "No data len specified\n")
+#define VERIFY_MASK_LEN(n, v) VERIFY_INT_ARG(n, v, "No mask len specified\n")
+#define VERIFY_MIN_INTERVAL(n, v) VERIFY_INT_ARG(n, v, \
+						"No min interval specified\n")
+#define VERIFY_MAX_INTERVAL(n, v) VERIFY_INT_ARG(n, v, \
+						"No max interval specified\n")
+#define VERIFY_APPEARANCE(n, v) VERIFY_INT_ARG(n, v, "No apperance specified\n")
+#define VERIFY_MANUFACTURER_LEN(n, v) VERIFY_INT_ARG(n, v, \
+					"No manufacturer len specified\n")
+#define VERIFY_SERVICE_DATA_LEN(n, v) VERIFY_INT_ARG(n, v, \
+					"No service data len specified\n")
+#define VERIFY_SERVICE_UUID_LEN(n, v) VERIFY_INT_ARG(n, v, \
+					"No service uuid len specified\n")
+#define VERIFY_MTU(n, v) VERIFY_INT_ARG(n, v, "No mtu specified\n")
+#define VERIFY_LATENCY(n, v) VERIFY_INT_ARG(n, v, \
+						"No latency specified\n")
+#define VERIFY_TIMEOUT(n, v) VERIFY_INT_ARG(n, v, "No timeout specified\n")
+#define VERIFY_SCAN_INTERVAL(n, v) VERIFY_INT_ARG(n, v, \
+						"No scan interval specified\n")
+#define VERIFY_SCAN_WINDOW(n, v) VERIFY_INT_ARG(n, v, \
+						"No scan window specified\n")
+#define VERIFY_ADV_TYPE(n, v) VERIFY_INT_ARG(n, v, \
+					"No advertising type specified\n")
+#define VERIFY_CHNL_MAP(n, v) VERIFY_INT_ARG(n, v, \
+						"No channel map specified\n")
+#define VERIFY_TX_POWER(n, v) VERIFY_INT_ARG(n, v, \
+						"No tx power specified\n")
+#define VERIFY_TIMEOUT_S(n, v) VERIFY_INT_ARG(n, v, \
+						"No timeout in sec specified\n")
+#define VERIFY_BATCH_SCAN_FULL_MAX(n, v) VERIFY_INT_ARG(n, v, \
+					"No batch scan full max specified\n")
+#define VERIFY_BATCH_SCAN_TRUNC_MAX(n, v) VERIFY_INT_ARG(n, v, \
+					"No batch scan trunc max specified\n")
+#define VERIFY_BATCH_SCAN_NOTIFY_THR(n, v) VERIFY_INT_ARG(n, v, \
+				"No batch scan notify threshold specified\n")
+#define VERIFY_SCAN_MODE(n, v) VERIFY_INT_ARG(n, v, \
+						"No scan mode specified\n")
+#define VERIFY_ADDR_TYPE(n, v) VERIFY_INT_ARG(n, v, \
+						"No address type specified\n")
+#define VERIFY_DISCARD_RULE(n, v) VERIFY_INT_ARG(n, v, \
+						"No discard rule specified\n")
 #define VERIFY_HANDLE(n, v) VERIFY_HEX_ARG(n, v, "No "#v" specified\n")
 #define VERIFY_SERVICE_HANDLE(n, v) VERIFY_HANDLE(n, v)
 
@@ -114,9 +178,14 @@ const btgatt_interface_t *if_gatt = NULL;
 		} \
 	} while (0)
 
-#define GET_VERIFY_HEX_STRING(n, v, l) \
+#define GET_VERIFY_HEX_STRING(i, v, l) \
 	do { \
 		int ll;\
+		const char *n = argv[i]; \
+		if (argc <= i) { \
+			haltest_error("No value specified\n"); \
+			return; \
+		} \
 		if (n[0] != '0' || (n[1] != 'X' && n[1] != 'x')) { \
 			haltest_error("Value must be hex string\n"); \
 			return; \
@@ -606,6 +675,126 @@ static void gattc_listen_cb(int status, int client_if)
 								status);
 }
 
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+/* Callback invoked when the MTU for a given connection changes */
+static void gattc_configure_mtu_cb(int conn_id, int status, int mtu)
+{
+	haltest_info("%s: conn_id=%d, status=%d, mtu=%d", __func__, conn_id,
+								status, mtu);
+}
+
+/* Callback invoked when a scan filter configuration command has completed */
+static void gattc_scan_filter_cfg_cb(int action, int client_if, int status,
+						int filt_type, int avbl_space)
+{
+	haltest_info("%s: action=%d, client_if=%d, status=%d, filt_type=%d"
+			", avbl_space=%d", __func__, action, client_if, status,
+			filt_type, avbl_space);
+}
+
+/* Callback invoked when scan param has been added, cleared, or deleted */
+static void gattc_scan_filter_param_cb(int action, int client_if, int status,
+								int avbl_space)
+{
+	haltest_info("%s: action=%d, client_if=%d, status=%d, avbl_space=%d",
+			__func__, action, client_if, status, avbl_space);
+}
+
+/* Callback invoked when a scan filter configuration command has completed */
+static void gattc_scan_filter_status_cb(int enable, int client_if, int status)
+{
+	haltest_info("%s: enable=%d, client_if=%d, status=%d", __func__,
+						enable, client_if, status);
+}
+
+/* Callback invoked when multi-adv enable operation has completed */
+static void gattc_multi_adv_enable_cb(int client_if, int status)
+{
+	haltest_info("%s: client_if=%d, status=%d", __func__, client_if,
+									status);
+}
+
+/* Callback invoked when multi-adv param update operation has completed */
+static void gattc_multi_adv_update_cb(int client_if, int status)
+{
+	haltest_info("%s: client_if=%d, status=%d", __func__, client_if,
+									status);
+}
+
+/* Callback invoked when multi-adv instance data set operation has completed */
+static void gattc_multi_adv_data_cb(int client_if, int status)
+{
+	haltest_info("%s: client_if=%d, status=%d", __func__, client_if,
+									status);
+}
+
+/* Callback invoked when multi-adv disable operation has completed */
+static void gattc_multi_adv_disable_cb(int client_if, int status)
+{
+	haltest_info("%s: client_if=%d, status=%d", __func__, client_if,
+									status);
+}
+
+/*
+ * Callback notifying an application that a remote device connection is
+ * currently congested and cannot receive any more data. An application should
+ * avoid sending more data until a further callback is received indicating the
+ * congestion status has been cleared.
+ */
+static void gattc_congestion_cb(int conn_id, bool congested)
+{
+	haltest_info("%s: conn_id=%d, congested=%d", __func__, conn_id,
+								congested);
+}
+
+/* Callback invoked when batchscan storage config operation has completed */
+static void gattc_batchscan_cfg_storage_cb(int client_if, int status)
+{
+	haltest_info("%s: client_if=%d, status=%d", __func__, client_if,
+									status);
+}
+
+/* Callback invoked when batchscan enable / disable operation has completed */
+static void gattc_batchscan_enable_disable_cb(int action, int client_if,
+								int status)
+{
+	haltest_info("%s: action=%d, client_if=%d, status=%d", __func__, action,
+							client_if, status);
+}
+
+/* Callback invoked when batchscan reports are obtained */
+static void gattc_batchscan_reports_cb(int client_if, int status,
+					int report_format, int num_records,
+					int data_len, uint8_t* rep_data)
+{
+	/* BTGATT_MAX_ATTR_LEN = 600 */
+	char valbuf[600];
+
+	haltest_info("%s: client_if=%d, status=%d, report_format=%d"
+			", num_records=%d, data_len=%d, rep_data=%s", __func__,
+			client_if, status, report_format, num_records, data_len,
+			array2str(rep_data, data_len, valbuf, sizeof(valbuf)));
+}
+
+/* Callback invoked when batchscan storage threshold limit is crossed */
+static void gattc_batchscan_threshold_cb(int client_if)
+{
+	haltest_info("%s: client_if=%d", __func__, client_if);
+}
+
+/* Track ADV VSE callback invoked when tracked device is found or lost */
+static void gattc_track_adv_event_cb(int client_if, int filt_index,
+						int addr_type, bt_bdaddr_t* bda,
+						int adv_state)
+{
+	char buf[MAX_ADDR_STR_LEN];
+
+	haltest_info("%s, client_if=%d, filt_index=%d, addr_type=%d, bda=%s"
+			", adv_state=%d", __func__, client_if, filt_index,
+			addr_type, bt_bdaddr_t2str(bda, buf), adv_state);
+}
+#endif
+
 static const btgatt_client_callbacks_t btgatt_client_callbacks = {
 	.register_client_cb = gattc_register_client_cb,
 	.scan_result_cb = gattc_scan_result_cb,
@@ -625,6 +814,22 @@ static const btgatt_client_callbacks_t btgatt_client_callbacks = {
 	.execute_write_cb = gattc_execute_write_cb,
 	.read_remote_rssi_cb = gattc_read_remote_rssi_cb,
 	.listen_cb = gattc_listen_cb,
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	.configure_mtu_cb = gattc_configure_mtu_cb,
+	.scan_filter_cfg_cb = gattc_scan_filter_cfg_cb,
+	.scan_filter_param_cb = gattc_scan_filter_param_cb,
+	.scan_filter_status_cb = gattc_scan_filter_status_cb,
+	.multi_adv_enable_cb = gattc_multi_adv_enable_cb,
+	.multi_adv_update_cb = gattc_multi_adv_update_cb,
+	.multi_adv_data_cb = gattc_multi_adv_data_cb,
+	.multi_adv_disable_cb = gattc_multi_adv_disable_cb,
+	.congestion_cb = gattc_congestion_cb,
+	.batchscan_cfg_storage_cb = gattc_batchscan_cfg_storage_cb,
+	.batchscan_enb_disable_cb = gattc_batchscan_enable_disable_cb,
+	.batchscan_reports_cb = gattc_batchscan_reports_cb,
+	.batchscan_threshold_cb = gattc_batchscan_threshold_cb,
+	.track_adv_event_cb = gattc_track_adv_event_cb,
+#endif
 };
 
 /* BT-GATT Server callbacks */
@@ -777,6 +982,29 @@ static void gatts_response_confirmation_cb(int status, int handle)
 	haltest_info("%s: status=%d handle=0x%x\n", __func__, status, handle);
 }
 
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+/**
+ * Callback confirming that a notification or indication has been sent
+ * to a remote device.
+ */
+static void gatts_indication_sent_cb(int conn_id, int status)
+{
+	haltest_info("%s: status=%d conn_id=%d", __func__, status, conn_id);
+}
+
+/**
+ * Callback notifying an application that a remote device connection is
+ * currently congested and cannot receive any more data. An application
+ * should avoid sending more data until a further callback is received
+ * indicating the congestion status has been cleared.
+ */
+static void gatts_congestion_cb(int conn_id, bool congested)
+{
+	haltest_info("%s: conn_id=%d congested=%d", __func__, conn_id,
+								congested);
+}
+#endif
+
 static const btgatt_server_callbacks_t btgatt_server_callbacks = {
 	.register_server_cb = gatts_register_server_cb,
 	.connection_cb = gatts_connection_cb,
@@ -790,7 +1018,11 @@ static const btgatt_server_callbacks_t btgatt_server_callbacks = {
 	.request_read_cb = gatts_request_read_cb,
 	.request_write_cb = gatts_request_write_cb,
 	.request_exec_write_cb = gatts_request_exec_write_cb,
-	.response_confirmation_cb = gatts_response_confirmation_cb
+	.response_confirmation_cb = gatts_response_confirmation_cb,
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	.indication_sent_cb = gatts_indication_sent_cb,
+	.congestion_cb = gatts_congestion_cb,
+#endif
 };
 
 static const btgatt_callbacks_t gatt_cbacks = {
@@ -926,11 +1158,14 @@ static void unregister_client_p(int argc, const char **argv)
 
 static void scan_p(int argc, const char **argv)
 {
+#if ANDROID_VERSION < PLATFORM_VER(5, 0, 0)
 	int client_if;
+#endif
 	int start = 1;
 
 	RETURN_IF_NULL(if_gatt);
 
+#if ANDROID_VERSION < PLATFORM_VER(5, 0, 0)
 	VERIFY_CLIENT_IF(2, client_if);
 
 	/* start */
@@ -938,6 +1173,13 @@ static void scan_p(int argc, const char **argv)
 		start = atoi(argv[3]);
 
 	EXEC(if_gatt->client->scan, client_if, start);
+#else
+	/* start */
+	if (argc >= 3)
+		start = atoi(argv[2]);
+
+	EXEC(if_gatt->client->scan, start);
+#endif
 }
 
 /* connect */
@@ -959,6 +1201,9 @@ static void connect_p(int argc, const char **argv)
 	int client_if;
 	bt_bdaddr_t bd_addr;
 	int is_direct = 1;
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	int transport = 1;
+#endif
 
 	RETURN_IF_NULL(if_gatt);
 	VERIFY_CLIENT_IF(2, client_if);
@@ -968,7 +1213,16 @@ static void connect_p(int argc, const char **argv)
 	if (argc > 4)
 		is_direct = atoi(argv[4]);
 
+#if ANDROID_VERSION < PLATFORM_VER(5, 0, 0)
 	EXEC(if_gatt->client->connect, client_if, &bd_addr, is_direct);
+#else
+	/* transport */
+	if (argc > 5)
+		transport = atoi(argv[5]);
+
+	EXEC(if_gatt->client->connect, client_if, &bd_addr, is_direct,
+								transport);
+#endif
 }
 
 /* disconnect */
@@ -1206,13 +1460,7 @@ static void write_characteristic_p(int argc, const char **argv)
 	}
 	write_type = atoi(argv[5]);
 
-	/* value */
-	if (argc <= 6) {
-		haltest_error("No value specified\n");
-		return;
-	}
-
-	GET_VERIFY_HEX_STRING(argv[6], value, len);
+	GET_VERIFY_HEX_STRING(6, value, len);
 
 	/* auth_req */
 	if (argc > 7)
@@ -1416,6 +1664,499 @@ static void read_remote_rssi_p(int argc, const char **argv)
 	EXEC(if_gatt->client->read_remote_rssi, client_if, &bd_addr);
 }
 
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+/* scan filter parameter setup */
+static void scan_filter_param_setup_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void scan_filter_param_setup_p(int argc, const char **argv)
+{
+	int client_if;
+	int action;
+	int filt_index;
+	int feat_seln;
+	int list_logic_type, filt_logic_type;
+	int rssi_high_thres, rssi_low_thres;
+	int dely_mode;
+	int found_timeout, lost_timeout, found_timeout_cnt;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_ACTION(3, action);
+	VERIFY_FILT_INDEX(4, filt_index);
+	VERIFY_FEAT_SELN(5, feat_seln);
+	VERIFY_LIST_LOGIC_TYPE(6, list_logic_type);
+	VERIFY_FILT_LOGIC_TYPE(7, filt_logic_type);
+	VERIFY_RSSI_HI_THR(8, rssi_high_thres);
+	VERIFY_RSSI_LOW_THR(9, rssi_low_thres);
+	VERIFY_DELY_MODE(10, dely_mode);
+	VERIFY_FND_TIME(11, found_timeout);
+	VERIFY_LOST_TIME(12, lost_timeout);
+	VERIFY_FND_TIME_CNT(13, found_timeout_cnt);
+
+	EXEC(if_gatt->client->scan_filter_param_setup, client_if, action,
+		filt_index, feat_seln, list_logic_type, filt_logic_type,
+		rssi_high_thres, rssi_low_thres, dely_mode, found_timeout,
+		lost_timeout, found_timeout_cnt);
+}
+
+/* scan filter add remove */
+
+static void scan_filter_add_remove_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	} else if (argc == 10) {
+		*user = last_addr;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void scan_filter_add_remove_p(int argc, const char **argv)
+{
+	int client_if;
+	int action;
+	int filt_type;
+	int filt_index;
+	int company_id;
+	int company_id_mask;
+	bt_uuid_t p_uuid;
+	bt_uuid_t p_uuid_mask;
+	bt_bdaddr_t bd_addr;
+	char addr_type;
+	int data_len;
+	uint8_t p_data[100];
+	int mask_len;
+	uint8_t p_mask[100];
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_ACTION(3, action);
+	VERIFY_FILT_TYPE(4, filt_type);
+	VERIFY_FILT_INDEX(5, filt_index);
+	VERIFY_COMP_ID(6, company_id);
+	VERIFY_COMP_ID_MASK(7, company_id_mask);
+
+	if (argc <= 9) {
+		haltest_error("No p_uuid, p_uuid_mask specified\n");
+		return;
+	}
+	gatt_str2bt_uuid_t(argv[8], -1, &p_uuid);
+	gatt_str2bt_uuid_t(argv[9], -1, &p_uuid_mask);
+
+	VERIFY_UUID(8, &p_uuid);
+	VERIFY_UUID(9, &p_uuid_mask);
+	VERIFY_ADDR_ARG(10, &bd_addr);
+	VERIFY_ADDR_TYPE(11, addr_type);
+	GET_VERIFY_HEX_STRING(12, p_data, data_len);
+	GET_VERIFY_HEX_STRING(13, p_mask, mask_len);
+
+	EXEC(if_gatt->client->scan_filter_add_remove, client_if, action,
+		filt_type, filt_index, company_id, company_id_mask,
+		&p_uuid, &p_uuid_mask, &bd_addr, addr_type, data_len,
+		(char *) p_data, mask_len, (char *) p_mask);
+}
+
+/* scan filter clean */
+static void scan_filter_clear_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void scan_filter_clear_p(int argc, const char **argv)
+{
+	int client_if;
+	int filt_index;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_FILT_INDEX(3, filt_index);
+
+	EXEC(if_gatt->client->scan_filter_clear, client_if, filt_index);
+}
+
+/* scan filter enable */
+static void scan_filter_enable_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void scan_filter_enable_p(int argc, const char **argv)
+{
+	int client_if;
+	int enable = 0;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+
+	/* enable */
+	if (argc >= 4)
+		enable = atoi(argv[3]);
+
+	EXEC(if_gatt->client->scan_filter_clear, client_if, enable);
+}
+
+/* set advertising data */
+static void set_adv_data_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void set_adv_data_p(int argc, const char **argv)
+{
+	int client_if;
+	bool set_scan_rsp;
+	bool include_name, include_txpower;
+	int min_interval, max_interval;
+	int appearance;
+	uint16_t manufacturer_len;
+	uint8_t manufacturer_data[100];
+	uint16_t service_data_len;
+	uint8_t service_data[100];
+	uint16_t service_uuid_len;
+	uint8_t service_uuid[100];
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+
+	/* set scan response */
+	if (argc >= 4)
+		set_scan_rsp = atoi(argv[3]);
+	/* include name */
+	if (argc >= 5)
+		include_name = atoi(argv[4]);
+	/* include txpower */
+	if (argc >= 6)
+		include_txpower = atoi(argv[5]);
+
+	VERIFY_MIN_INTERVAL(6, min_interval);
+	VERIFY_MAX_INTERVAL(7, max_interval);
+	VERIFY_APPEARANCE(8, appearance);
+	GET_VERIFY_HEX_STRING(9, manufacturer_data, manufacturer_len);
+	GET_VERIFY_HEX_STRING(10, service_data, service_data_len);
+	GET_VERIFY_HEX_STRING(11, service_uuid, service_uuid_len);
+
+	EXEC(if_gatt->client->set_adv_data, client_if, set_scan_rsp,
+		include_name, include_txpower, min_interval, max_interval,
+		appearance, manufacturer_len, (char *) manufacturer_data,
+		service_data_len, (char *) service_data, service_uuid_len,
+		(char *) service_uuid);
+}
+
+/* configure mtu */
+static void configure_mtu_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = conn_id_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void configure_mtu_p(int argc, const char **argv)
+{
+	int conn_id;
+	int mtu;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CONN_ID(2, conn_id);
+	VERIFY_MTU(3, mtu);
+
+	EXEC(if_gatt->client->configure_mtu, conn_id, mtu);
+}
+
+/* con parameter update */
+static void conn_parameter_update_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = last_addr;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void conn_parameter_update_p(int argc, const char **argv)
+{
+	bt_bdaddr_t bd_addr;
+	int min_interval, max_interval;
+	int latency;
+	int timeout;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_ADDR_ARG(2, &bd_addr);
+	VERIFY_MIN_INTERVAL(3, min_interval);
+	VERIFY_MAX_INTERVAL(4, max_interval);
+	VERIFY_LATENCY(5, latency);
+	VERIFY_TIMEOUT(6, timeout);
+
+	EXEC(if_gatt->client->conn_parameter_update, &bd_addr, min_interval,
+						max_interval, latency, timeout);
+}
+
+/* set scan parameters */
+static void set_scan_parameters_p(int argc, const char **argv)
+{
+	int scan_interval;
+	int scan_window;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_SCAN_INTERVAL(2, scan_interval);
+	VERIFY_SCAN_WINDOW(3, scan_window);
+
+	EXEC(if_gatt->client->set_scan_parameters, scan_interval, scan_window);
+}
+
+/* enable multi advertising */
+static void multi_adv_enable_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void multi_adv_enable_p(int argc, const char **argv)
+{
+	int client_if;
+	int min_interval, max_interval;
+	int adv_type;
+	int chnl_map;
+	int tx_power;
+	int timeout_s;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_MIN_INTERVAL(3, min_interval);
+	VERIFY_MAX_INTERVAL(4, max_interval);
+	VERIFY_ADV_TYPE(5, adv_type);
+	VERIFY_CHNL_MAP(6, chnl_map);
+	VERIFY_TX_POWER(7, tx_power);
+	VERIFY_TIMEOUT_S(8, timeout_s);
+
+	EXEC(if_gatt->client->multi_adv_enable, client_if, min_interval,
+			max_interval, adv_type, chnl_map, tx_power, timeout_s);
+}
+
+/* update multi advertiser */
+static void multi_adv_update_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void multi_adv_update_p(int argc, const char **argv)
+{
+	int client_if;
+	int min_interval, max_interval;
+	int adv_type;
+	int chnl_map;
+	int tx_power;
+	int timeout_s;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_MIN_INTERVAL(3, min_interval);
+	VERIFY_MAX_INTERVAL(4, max_interval);
+	VERIFY_ADV_TYPE(5, adv_type);
+	VERIFY_CHNL_MAP(6, chnl_map);
+	VERIFY_TX_POWER(7, tx_power);
+	VERIFY_TIMEOUT_S(8, timeout_s);
+
+	EXEC(if_gatt->client->multi_adv_update, client_if, min_interval,
+			max_interval, adv_type, chnl_map, tx_power, timeout_s);
+}
+
+/* set advertising data */
+static void multi_adv_set_inst_data_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void multi_adv_set_inst_data_p(int argc, const char **argv)
+{
+	int client_if;
+	bool set_scan_rsp;
+	bool include_name, include_txpower;
+	int appearance;
+	uint16_t manufacturer_len;
+	uint8_t manufacturer_data[100];
+	uint16_t service_data_len;
+	uint8_t service_data[100];
+	uint16_t service_uuid_len;
+	uint8_t service_uuid[100];
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+
+	/* set scan response */
+	if (argc >= 4)
+		set_scan_rsp = atoi(argv[3]);
+	/* include name */
+	if (argc >= 5)
+		include_name = atoi(argv[4]);
+	/* include txpower */
+	if (argc >= 6)
+		include_txpower = atoi(argv[5]);
+
+	VERIFY_APPEARANCE(6, appearance);
+	GET_VERIFY_HEX_STRING(7, manufacturer_data, manufacturer_len);
+	GET_VERIFY_HEX_STRING(8, service_data, service_data_len);
+	GET_VERIFY_HEX_STRING(9, service_uuid, service_uuid_len);
+
+	EXEC(if_gatt->client->multi_adv_set_inst_data, client_if, set_scan_rsp,
+		include_name, include_txpower, appearance, manufacturer_len,
+		(char *) manufacturer_data, service_data_len,
+		(char *) service_data, service_uuid_len, (char *) service_uuid);
+}
+
+/* multi advertising disable */
+static void multi_adv_disable_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void multi_adv_disable_p(int argc, const char **argv)
+{
+	int client_if;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+
+	EXEC(if_gatt->client->multi_adv_disable, client_if);
+}
+
+/* batch scanconfigure storage */
+static void batchscan_cfg_storage_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void batchscan_cfg_storage_p(int argc, const char **argv)
+{
+	int client_if;
+	int batch_scan_full_max;
+	int batch_scan_trunc_max;
+	int batch_scan_notify_threshold;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_BATCH_SCAN_FULL_MAX(3, batch_scan_full_max);
+	VERIFY_BATCH_SCAN_TRUNC_MAX(4, batch_scan_trunc_max);
+	VERIFY_BATCH_SCAN_NOTIFY_THR(5, batch_scan_notify_threshold);
+
+	EXEC(if_gatt->client->batchscan_cfg_storage, client_if,
+				batch_scan_full_max, batch_scan_trunc_max,
+				batch_scan_notify_threshold);
+}
+
+/* enable batch scan */
+static void batchscan_enb_batch_scan_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void batchscan_enb_batch_scan_p(int argc, const char **argv)
+{
+	int client_if;
+	int scan_mode, scan_interval, scan_window;
+	int addr_type;
+	int discard_rule;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_SCAN_MODE(3, scan_mode);
+	VERIFY_SCAN_INTERVAL(4, scan_interval);
+	VERIFY_SCAN_WINDOW(5, scan_window);
+	VERIFY_ADDR_TYPE(6, addr_type);
+	VERIFY_DISCARD_RULE(7, discard_rule);
+
+	EXEC(if_gatt->client->batchscan_enb_batch_scan, client_if, scan_mode,
+			scan_interval, scan_window, addr_type, discard_rule);
+}
+
+/* batchscan disable */
+static void batchscan_dis_batch_scan_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void batchscan_dis_batch_scan_p(int argc, const char **argv)
+{
+	int client_if;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+
+	EXEC(if_gatt->client->batchscan_dis_batch_scan, client_if);
+}
+
+/* batchscan read reports */
+static void batchscan_read_reports_c(int argc, const char **argv,
+					enum_func *enum_func, void **user)
+{
+	if (argc == 2) {
+		*user = client_if_str;
+		*enum_func = enum_one_string;
+	}
+}
+
+static void batchscan_read_reports_p(int argc, const char **argv)
+{
+	int client_if;
+	int scan_mode;
+
+	RETURN_IF_NULL(if_gatt);
+	VERIFY_CLIENT_IF(2, client_if);
+	VERIFY_SCAN_MODE(3, scan_mode);
+
+	EXEC(if_gatt->client->batchscan_read_reports, client_if, scan_mode);
+}
+#endif
+
 /* get_device_type */
 
 static void get_device_type_c(int argc, const char **argv, enum_func *enum_func,
@@ -1479,8 +2220,51 @@ static void test_command_p(int argc, const char **argv)
 static struct method client_methods[] = {
 	STD_METHODH(register_client, "[<uuid>]"),
 	STD_METHODCH(unregister_client, "<client_if>"),
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	STD_METHODCH(scan, "[1|0]"),
+	STD_METHODCH(connect, "<client_if> <addr> [<is_direct>] [<transport]"),
+	STD_METHODCH(scan_filter_param_setup, "<client_if> <action>"
+			" <filt_index> <feat_seln> <list_logic_type>"
+			" <filt_logic_type> <rssi_high_thres> <rssi_low_thres>"
+			" <dely_mode> <found_timeout> <lost_timeout>"
+			" <found_timeout_cnt>"),
+	STD_METHODCH(scan_filter_add_remove, "<client_if> <action> <filt_type>"
+			" <filt_index> <company_id> <company_id_mask>"
+			" [<p_uuid>] <p_uuid_mask> <addr> <addr_type>"
+			" [<p_data>] [<p_mask>]"),
+	STD_METHODCH(scan_filter_clear, "<client_if> <filt_index>"),
+	STD_METHODCH(scan_filter_enable, "<client_if> [<enable>]"),
+	STD_METHODCH(set_adv_data, "<client_if> [<set_scan_rsp>] <include_name>"
+			" [<include_txpower>] <min_interval> <max_interval>"
+			" <appearance> [<manufacturer_data>] [<service_data>]"
+			" [<service_uuid>]"),
+	STD_METHODCH(configure_mtu, "<conn_id> <mtu>"),
+	STD_METHODCH(conn_parameter_update, "<bd_addr> <min_interval>"
+					" <max_interval> <latency> <timeout>"),
+	STD_METHODH(set_scan_parameters, "<scan_inverval> <scan_window>"),
+	STD_METHODCH(multi_adv_enable, "<client_if> <min_interval>"
+			" <max_interval> <adv_type> <chnl_map> <tx_power>"
+			" <timeout_s>"),
+	STD_METHODCH(multi_adv_update, "<client_if> <min_interval>"
+			" <max_interval> <adv_type> <chnl_map> <tx_power>"
+			" <timeout_s>"),
+	STD_METHODCH(multi_adv_set_inst_data, "<client_if> [<set_scan_rsp>]"
+			" <include_name> [<include_txpower>] <appearance>"
+			" [<manufacturer_data>] [<service_data>]"
+			" [<service_uuid>]"),
+	STD_METHODCH(multi_adv_disable, "<client_if>"),
+	STD_METHODCH(batchscan_cfg_storage, "<client_if> <batch_scan_full_max>"
+					" <batch_scan_trunc_max>"
+					" <batch_scan_notify_threshold>"),
+	STD_METHODCH(batchscan_enb_batch_scan, "<client_if> <scan_mode>"
+			" <scan_interval> <scan_window> <addr_type>"
+			" <discard_rule>"),
+	STD_METHODCH(batchscan_dis_batch_scan, "<client_if>"),
+	STD_METHODCH(batchscan_read_reports, "<client_if> <scan_mode>"),
+#else
 	STD_METHODCH(scan, "<client_if> [1|0]"),
 	STD_METHODCH(connect, "<client_if> <addr> [<is_direct>]"),
+#endif
 	STD_METHODCH(disconnect, "<client_if> <addr> <conn_id>"),
 	STD_METHODCH(refresh, "<client_if> <addr>"),
 	STD_METHODCH(search_service, "<conn_id> [<uuid>]"),
@@ -1572,6 +2356,9 @@ static void gatts_connect_p(int argc, const char *argv[])
 	int server_if;
 	bt_bdaddr_t bd_addr;
 	int is_direct = 1;
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	int transport = 1;
+#endif
 
 	RETURN_IF_NULL(if_gatt);
 	VERIFY_SERVER_IF(2, server_if);
@@ -1581,7 +2368,16 @@ static void gatts_connect_p(int argc, const char *argv[])
 	if (argc > 4)
 		is_direct = atoi(argv[4]);
 
+#if ANDROID_VERSION < PLATFORM_VER(5, 0, 0)
 	EXEC(if_gatt->server->connect, server_if, &bd_addr, is_direct);
+#else
+	/* transport */
+	if (argc > 5)
+		transport = atoi(argv[5]);
+
+	EXEC(if_gatt->server->connect, server_if, &bd_addr, is_direct,
+								transport);
+#endif
 }
 
 /* disconnect */
@@ -1807,8 +2603,7 @@ static void gatts_send_indication_p(int argc, const char *argv[])
 	}
 	confirm = atoi(argv[5]);
 
-	if (argc > 6)
-		GET_VERIFY_HEX_STRING(argv[6], data, len);
+	GET_VERIFY_HEX_STRING(6, data, len);
 
 	EXEC(if_gatt->server->send_indication, server_if, attr_handle, conn_id,
 							len, confirm, data);
@@ -1836,15 +2631,7 @@ static void gatts_send_response_p(int argc, const char *argv[])
 	data.attr_value.auth_req = 0;
 	data.attr_value.len = 0;
 
-	if (argc > 7) {
-		GET_VERIFY_HEX_STRING(argv[7], data.attr_value.value,
-							data.attr_value.len);
-
-		if (data.attr_value.len == 0) {
-			haltest_error("Failed to parse response value");
-			return;
-		}
-	}
+	GET_VERIFY_HEX_STRING(7, data.attr_value.value, data.attr_value.len);
 
 	haltest_info("conn_id %d, trans_id %d, status %d", conn_id, trans_id,
 									status);
@@ -1858,7 +2645,11 @@ static void gatts_send_response_p(int argc, const char *argv[])
 static struct method server_methods[] = {
 	GATTS_METHODH(register_server, "[<uuid>]"),
 	GATTS_METHODCH(unregister_server, "<server_if>"),
+#if ANDROID_VERSION >= PLATFORM_VER(5, 0, 0)
+	GATTS_METHODCH(connect, "<server_if> <addr> [<is_direct>] [<transport>]"),
+#else
 	GATTS_METHODCH(connect, "<server_if> <addr> [<is_direct>]"),
+#endif
 	GATTS_METHODCH(disconnect, "<server_if> <addr> <conn_id>"),
 	GATTS_METHODCH(add_service, "<server_if> <srvc_id> <num_handles>"),
 	GATTS_METHODCH(add_included_service,

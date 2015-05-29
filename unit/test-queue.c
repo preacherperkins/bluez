@@ -78,6 +78,27 @@ static void test_foreach_destroy(void)
 	queue_foreach(queue, foreach_destroy, queue);
 }
 
+static void foreach_remove(void *data, void *user_data)
+{
+	struct queue *queue = user_data;
+
+	g_assert(queue_remove(queue, data));
+}
+
+static void test_foreach_remove(void)
+{
+	struct queue *queue;
+
+	queue = queue_new();
+	g_assert(queue != NULL);
+
+	queue_push_tail(queue, UINT_TO_PTR(1));
+	queue_push_tail(queue, UINT_TO_PTR(2));
+
+	queue_foreach(queue, foreach_remove, queue);
+	queue_destroy(queue, NULL);
+}
+
 static void foreach_remove_all(void *data, void *user_data)
 {
 	struct queue *queue = user_data;
@@ -99,13 +120,149 @@ static void test_foreach_remove_all(void)
 	queue_destroy(queue, NULL);
 }
 
+static void foreach_remove_backward(void *data, void *user_data)
+{
+	struct queue *queue = user_data;
+
+	queue_remove(queue, UINT_TO_PTR(2));
+	queue_remove(queue, UINT_TO_PTR(1));
+}
+
+static void test_foreach_remove_backward(void)
+{
+	struct queue *queue;
+
+	queue = queue_new();
+	g_assert(queue != NULL);
+
+	queue_push_tail(queue, UINT_TO_PTR(1));
+	queue_push_tail(queue, UINT_TO_PTR(2));
+
+	queue_foreach(queue, foreach_remove_backward, queue);
+	queue_destroy(queue, NULL);
+}
+
+static struct queue *static_queue;
+
+static void destroy_remove(void *user_data)
+{
+	queue_remove(static_queue, user_data);
+}
+
+static void test_destroy_remove(void)
+{
+	static_queue = queue_new();
+
+	g_assert(static_queue != NULL);
+
+	queue_push_tail(static_queue, UINT_TO_PTR(1));
+	queue_push_tail(static_queue, UINT_TO_PTR(2));
+
+	queue_destroy(static_queue, destroy_remove);
+}
+
+static void test_push_after(void)
+{
+	struct queue *queue;
+	unsigned int len, i;
+
+	queue = queue_new();
+	g_assert(queue != NULL);
+
+	/*
+	 * Pre-populate queue. Initial elements are:
+	 *   [ NULL, 2, 5 ]
+	 */
+	g_assert(queue_push_tail(queue, NULL));
+	g_assert(queue_push_tail(queue, UINT_TO_PTR(2)));
+	g_assert(queue_push_tail(queue, UINT_TO_PTR(5)));
+	g_assert(queue_length(queue) == 3);
+
+	/* Invalid insertion */
+	g_assert(!queue_push_after(queue, UINT_TO_PTR(6), UINT_TO_PTR(1)));
+
+	/* Valid insertions */
+	g_assert(queue_push_after(queue, NULL, UINT_TO_PTR(1)));
+	g_assert(queue_push_after(queue, UINT_TO_PTR(2), UINT_TO_PTR(3)));
+	g_assert(queue_push_after(queue, UINT_TO_PTR(3), UINT_TO_PTR(4)));
+	g_assert(queue_push_after(queue, UINT_TO_PTR(5), UINT_TO_PTR(6)));
+
+	g_assert(queue_peek_head(queue) == NULL);
+	g_assert(queue_peek_tail(queue) == UINT_TO_PTR(6));
+
+	/*
+	 * Queue should contain 7 elements:
+	 *   [ NULL, 1, 2, 3, 4, 5, 6 ]
+	 */
+	len = queue_length(queue);
+	g_assert(len == 7);
+
+	for (i = 0; i < 7; i++)
+		g_assert(queue_pop_head(queue) == UINT_TO_PTR(i));
+
+	/* Test with identical elements */
+	g_assert(queue_push_head(queue, UINT_TO_PTR(1)));
+	g_assert(queue_push_head(queue, UINT_TO_PTR(1)));
+	g_assert(queue_push_head(queue, UINT_TO_PTR(1)));
+	g_assert(queue_push_after(queue, UINT_TO_PTR(1), UINT_TO_PTR(0)));
+
+	g_assert(queue_pop_head(queue) == UINT_TO_PTR(1));
+	g_assert(queue_pop_head(queue) == UINT_TO_PTR(0));
+	g_assert(queue_pop_head(queue) == UINT_TO_PTR(1));
+	g_assert(queue_pop_head(queue) == UINT_TO_PTR(1));
+
+	queue_destroy(queue, NULL);
+}
+
+static bool match_int(const void *a, const void *b)
+{
+	int i = PTR_TO_INT(a);
+	int j = PTR_TO_INT(b);
+
+	return i == j;
+}
+
+static bool match_ptr(const void *a, const void *b)
+{
+	return a == b;
+}
+
+static void test_remove_all(void)
+{
+	struct queue *queue;
+
+	queue = queue_new();
+	g_assert(queue != NULL);
+
+	g_assert(queue_push_tail(queue, INT_TO_PTR(10)));
+
+	g_assert(queue_remove_all(queue, match_int, INT_TO_PTR(10), NULL) == 1);
+	g_assert(queue_isempty(queue));
+
+	g_assert(queue_push_tail(queue, NULL));
+	g_assert(queue_remove_all(queue, match_ptr, NULL, NULL) == 1);
+	g_assert(queue_isempty(queue));
+
+	g_assert(queue_push_tail(queue, UINT_TO_PTR(0)));
+	g_assert(queue_remove_all(queue, match_int, UINT_TO_PTR(0), NULL) == 1);
+	g_assert(queue_isempty(queue));
+
+	queue_destroy(queue, NULL);
+}
+
 int main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
 
 	g_test_add_func("/queue/basic", test_basic);
 	g_test_add_func("/queue/foreach_destroy", test_foreach_destroy);
+	g_test_add_func("/queue/foreach_remove", test_foreach_remove);
 	g_test_add_func("/queue/foreach_remove_all", test_foreach_remove_all);
+	g_test_add_func("/queue/foreach_remove_backward",
+						test_foreach_remove_backward);
+	g_test_add_func("/queue/destroy_remove", test_destroy_remove);
+	g_test_add_func("/queue/push_after", test_push_after);
+	g_test_add_func("/queue/remove_all", test_remove_all);
 
 	return g_test_run();
 }

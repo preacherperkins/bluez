@@ -39,9 +39,9 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
+#include "lib/bluetooth.h"
+#include "lib/hci.h"
+#include "lib/hci_lib.h"
 
 #include "src/textfile.h"
 #include "src/shared/util.h"
@@ -623,6 +623,9 @@ static void cmd_features(int ctl, int hdev, char *opt)
 						hdev, strerror(errno), errno);
 		exit(1);
 	}
+
+	if (max_page < 1 && (features[6] & LMP_SIMPLE_PAIR))
+		max_page = 1;
 
 	print_dev_hdr(&di);
 	printf("\tFeatures%s: 0x%2.2x 0x%2.2x 0x%2.2x 0x%2.2x "

@@ -17,6 +17,8 @@
 #include <stdbool.h>
 
 #include "emulator/bthost.h"
+#include "src/shared/tester.h"
+#include "src/shared/queue.h"
 #include "tester-main.h"
 
 static struct queue *list; /* List of bluetooth test cases */
@@ -446,6 +448,10 @@ static struct bt_action_data ssp_confirm_reject_reply = {
 
 static  struct bt_action_data no_input_no_output_io_cap = {
 	.io_cap = 0x03,
+};
+
+static  struct bt_action_data display_yes_no_io_cap = {
+	.io_cap = 0x01,
 };
 
 static uint16_t test_conn_handle = 0;
@@ -1034,6 +1040,7 @@ static struct test_case test_cases[] = {
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
 		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
 		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_io_cap, &display_yes_no_io_cap),
 		ACTION_SUCCESS(bt_start_discovery_action, NULL),
 		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
 							BT_DISCOVERY_STARTED),
@@ -1057,6 +1064,7 @@ static struct test_case test_cases[] = {
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
 		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
 		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_io_cap, &display_yes_no_io_cap),
 		ACTION_SUCCESS(bt_start_discovery_action, NULL),
 		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
 							BT_DISCOVERY_STARTED),
@@ -1081,6 +1089,7 @@ static struct test_case test_cases[] = {
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
 		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
 		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_io_cap, &display_yes_no_io_cap),
 		ACTION_SUCCESS(bt_create_bond_action,
 					&prop_test_remote_ble_bdaddr_req),
 		CALLBACK_BOND_STATE(BT_BOND_STATE_BONDING,
@@ -1113,6 +1122,7 @@ static struct test_case test_cases[] = {
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
 		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
 		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_io_cap, &display_yes_no_io_cap),
 		ACTION_SUCCESS(bt_start_discovery_action, NULL),
 		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
 							BT_DISCOVERY_STARTED),
@@ -1138,6 +1148,7 @@ static struct test_case test_cases[] = {
 		CALLBACK_STATE(CB_BT_ADAPTER_STATE_CHANGED, BT_STATE_ON),
 		ACTION_SUCCESS(emu_setup_powered_remote_action, NULL),
 		ACTION_SUCCESS(emu_set_ssp_mode_action, NULL),
+		ACTION_SUCCESS(emu_set_io_cap, &display_yes_no_io_cap),
 		ACTION_SUCCESS(bt_start_discovery_action, NULL),
 		CALLBACK_STATE(CB_BT_DISCOVERY_STATE_CHANGED,
 							BT_DISCOVERY_STARTED),
@@ -1213,10 +1224,14 @@ struct queue *get_bluetooth_tests(void)
 	uint16_t i = 0;
 
 	list = queue_new();
+	if (!list)
+		return NULL;
 
 	for (; i < sizeof(test_cases) / sizeof(test_cases[0]); ++i)
-		if (!queue_push_tail(list, &test_cases[i]))
+		if (!queue_push_tail(list, &test_cases[i])) {
+			queue_destroy(list, NULL);
 			return NULL;
+		}
 
 	return list;
 }

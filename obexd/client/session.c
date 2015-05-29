@@ -35,11 +35,12 @@
 #include <sys/stat.h>
 
 #include <glib.h>
-#include <gdbus/gdbus.h>
-#include <gobex/gobex.h>
 
+#include "gdbus/gdbus.h"
+#include "gobex/gobex.h"
+
+#include "obexd/src/log.h"
 #include "dbus.h"
-#include "log.h"
 #include "transfer.h"
 #include "session.h"
 #include "driver.h"
@@ -345,6 +346,7 @@ static void transport_func(GIOChannel *io, GError *err, gpointer user_data)
 	struct obc_driver *driver = session->driver;
 	struct obc_transport *transport = session->transport;
 	GObex *obex;
+	GObexApparam *apparam;
 	GObexTransportType type;
 	int tx_mtu = -1;
 	int rx_mtu = -1;
@@ -370,7 +372,29 @@ static void transport_func(GIOChannel *io, GError *err, gpointer user_data)
 
 	g_io_channel_set_close_on_unref(io, TRUE);
 
-	if (driver->target != NULL)
+	apparam = NULL;
+
+	if (driver->supported_features)
+		apparam = driver->supported_features(session);
+
+	if (apparam) {
+		uint8_t buf[1024];
+		ssize_t len;
+
+		len = g_obex_apparam_encode(apparam, buf, sizeof(buf));
+		if (driver->target)
+			g_obex_connect(obex, connect_cb, callback, &err,
+					G_OBEX_HDR_TARGET,
+					driver->target, driver->target_len,
+					G_OBEX_HDR_APPARAM,
+					buf, len,
+					G_OBEX_HDR_INVALID);
+		else
+			g_obex_connect(obex, connect_cb, callback, &err,
+					G_OBEX_HDR_APPARAM, buf, len,
+					G_OBEX_HDR_INVALID);
+		g_obex_apparam_free(apparam);
+	} else if (driver->target)
 		g_obex_connect(obex, connect_cb, callback, &err,
 			G_OBEX_HDR_TARGET, driver->target, driver->target_len,
 			G_OBEX_HDR_INVALID);
@@ -1125,6 +1149,12 @@ guint obc_session_setpath(struct obc_session *session, const char *path,
 	data->func = func;
 	data->user_data = user_data;
 	data->remaining = g_strsplit(strlen(path) ? path : "/", "/", 0);
+
+	if (!data->remaining || !data->remaining[0]) {
+		error("obc_session_setpath: invalid path %s", path);
+		g_set_error(err, OBEX_IO_ERROR, -EINVAL, "Invalid argument");
+		return 0;
+	}
 
 	p = pending_request_new(session, session_process_setpath, NULL,
 				setpath_op_complete, data, setpath_data_free);

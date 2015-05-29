@@ -32,15 +32,17 @@
 #include <stdbool.h>
 #include <signal.h>
 #include <sys/signalfd.h>
+#include <wordexp.h>
 
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <glib.h>
-#include <gdbus.h>
 
+#include "gdbus/gdbus.h"
 #include "monitor/uuid.h"
 #include "agent.h"
 #include "display.h"
+#include "gatt.h"
 
 /* String display constants */
 #define COLORED_NEW	COLOR_GREEN "NEW" COLOR_OFF
@@ -57,6 +59,8 @@ static GDBusProxy *agent_manager;
 static char *auto_register_agent = NULL;
 
 static GDBusProxy *default_ctrl;
+static GDBusProxy *default_dev;
+static GDBusProxy *default_attr;
 static GList *ctrl_list;
 static GList *dev_list;
 
@@ -155,9 +159,9 @@ static void print_iter(const char *label, const char *name,
 	dbus_uint32_t valu32;
 	dbus_uint16_t valu16;
 	dbus_int16_t vals16;
+	unsigned char byte;
 	const char *valstr;
 	DBusMessageIter subiter;
-	int type;
 
 	if (iter == NULL) {
 		rl_printf("%s%s is nil\n", label, name);
@@ -190,23 +194,27 @@ static void print_iter(const char *label, const char *name,
 		dbus_message_iter_get_basic(iter, &vals16);
 		rl_printf("%s%s: %d\n", label, name, vals16);
 		break;
+	case DBUS_TYPE_BYTE:
+		dbus_message_iter_get_basic(iter, &byte);
+		rl_printf("%s%s: 0x%02x\n", label, name, byte);
+		break;
+	case DBUS_TYPE_VARIANT:
+		dbus_message_iter_recurse(iter, &subiter);
+		print_iter(label, name, &subiter);
+		break;
 	case DBUS_TYPE_ARRAY:
 		dbus_message_iter_recurse(iter, &subiter);
-		rl_printf("%s%s:\n", label, name);
-
-		do {
-			type = dbus_message_iter_get_arg_type(&subiter);
-			if (type == DBUS_TYPE_INVALID)
-				break;
-
-			if (type == DBUS_TYPE_STRING) {
-				dbus_message_iter_get_basic(&subiter, &valstr);
-				rl_printf("\t%s\n", valstr);
-			}
-
+		while (dbus_message_iter_get_arg_type(&subiter) !=
+							DBUS_TYPE_INVALID) {
+			print_iter(label, name, &subiter);
 			dbus_message_iter_next(&subiter);
-		} while(true);
-
+		}
+		break;
+	case DBUS_TYPE_DICT_ENTRY:
+		dbus_message_iter_recurse(iter, &subiter);
+		dbus_message_iter_get_basic(&subiter, &valstr);
+		dbus_message_iter_next(&subiter);
+		print_iter(label, valstr, &subiter);
 		break;
 	default:
 		rl_printf("%s%s has unsupported type\n", label, name);
@@ -284,6 +292,29 @@ static gboolean device_is_child(GDBusProxy *device, GDBusProxy *master)
 	return FALSE;
 }
 
+static gboolean service_is_child(GDBusProxy *service)
+{
+	GList *l;
+	DBusMessageIter iter;
+	const char *device, *path;
+
+	if (g_dbus_proxy_get_property(service, "Device", &iter) == FALSE)
+		return FALSE;
+
+	dbus_message_iter_get_basic(&iter, &device);
+
+	for (l = dev_list; l; l = g_list_next(l)) {
+		GDBusProxy *proxy = l->data;
+
+		path = g_dbus_proxy_get_path(proxy);
+
+		if (!strcmp(path, device))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 static void proxy_added(GDBusProxy *proxy, void *user_data)
 {
 	const char *interface;
@@ -311,7 +342,58 @@ static void proxy_added(GDBusProxy *proxy, void *user_data)
 				agent_register(dbus_conn, agent_manager,
 							auto_register_agent);
 		}
+	} else if (!strcmp(interface, "org.bluez.GattService1")) {
+		if (service_is_child(proxy))
+			gatt_add_service(proxy);
+	} else if (!strcmp(interface, "org.bluez.GattCharacteristic1")) {
+		gatt_add_characteristic(proxy);
+	} else if (!strcmp(interface, "org.bluez.GattDescriptor1")) {
+		gatt_add_descriptor(proxy);
+	} else if (!strcmp(interface, "org.bluez.GattManager1")) {
+		gatt_add_manager(proxy);
 	}
+}
+
+static void set_default_device(GDBusProxy *proxy, const char *attribute)
+{
+	char *desc = NULL;
+	DBusMessageIter iter;
+	const char *path;
+
+	default_dev = proxy;
+
+	if (proxy == NULL) {
+		default_attr = NULL;
+		goto done;
+	}
+
+	if (!g_dbus_proxy_get_property(proxy, "Alias", &iter)) {
+		if (!g_dbus_proxy_get_property(proxy, "Address", &iter))
+			goto done;
+	}
+
+	path = g_dbus_proxy_get_path(proxy);
+
+	dbus_message_iter_get_basic(&iter, &desc);
+	desc = g_strdup_printf(COLOR_BLUE "[%s%s%s]" COLOR_OFF "# ", desc,
+				attribute ? ":" : "",
+				attribute ? attribute + strlen(path) : "");
+
+done:
+	rl_set_prompt(desc ? desc : PROMPT_ON);
+	rl_redisplay();
+	g_free(desc);
+}
+
+static void set_default_attribute(GDBusProxy *proxy)
+{
+	const char *path;
+
+	default_attr = proxy;
+
+	path = g_dbus_proxy_get_path(proxy);
+
+	set_default_device(default_dev, path);
 }
 
 static void proxy_removed(GDBusProxy *proxy, void *user_data)
@@ -325,6 +407,9 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 			dev_list = g_list_remove(dev_list, proxy);
 
 			print_device(proxy, COLORED_DEL);
+
+			if (default_dev == proxy)
+				set_default_device(NULL, NULL);
 		}
 	} else if (!strcmp(interface, "org.bluez.Adapter1")) {
 		ctrl_list = g_list_remove(ctrl_list, proxy);
@@ -333,6 +418,7 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 
 		if (default_ctrl == proxy) {
 			default_ctrl = NULL;
+			set_default_device(NULL, NULL);
 
 			g_list_free(dev_list);
 			dev_list = NULL;
@@ -343,6 +429,25 @@ static void proxy_removed(GDBusProxy *proxy, void *user_data)
 			if (auto_register_agent)
 				agent_unregister(dbus_conn, NULL);
 		}
+	} else if (!strcmp(interface, "org.bluez.GattService1")) {
+		if (service_is_child(proxy)) {
+			gatt_remove_service(proxy);
+
+			if (default_attr == proxy)
+				set_default_attribute(NULL);
+		}
+	} else if (!strcmp(interface, "org.bluez.GattCharacteristic1")) {
+		gatt_remove_characteristic(proxy);
+
+		if (default_attr == proxy)
+			set_default_attribute(NULL);
+	} else if (!strcmp(interface, "org.bluez.GattDescriptor1")) {
+		gatt_remove_descriptor(proxy);
+
+		if (default_attr == proxy)
+			set_default_attribute(NULL);
+	} else if (!strcmp(interface, "org.bluez.GattManager1")) {
+		gatt_remove_manager(proxy);
 	}
 }
 
@@ -369,6 +474,17 @@ static void property_changed(GDBusProxy *proxy, const char *name,
 			} else
 				str = g_strdup("");
 
+			if (strcmp(name, "Connected") == 0) {
+				dbus_bool_t connected;
+
+				dbus_message_iter_get_basic(iter, &connected);
+
+				if (connected && default_dev == NULL)
+					set_default_device(proxy, NULL);
+				else if (!connected && default_dev == proxy)
+					set_default_device(NULL, NULL);
+			}
+
 			print_iter(str, name, iter);
 			g_free(str);
 		}
@@ -385,6 +501,14 @@ static void property_changed(GDBusProxy *proxy, const char *name,
 						"] Controller %s ", address);
 		} else
 			str = g_strdup("");
+
+		print_iter(str, name, iter);
+		g_free(str);
+	} else if (proxy == default_attr) {
+		char *str;
+
+		str = g_strdup_printf("[" COLORED_CHG "] Attribute %s ",
+						g_dbus_proxy_get_path(proxy));
 
 		print_iter(str, name, iter);
 		g_free(str);
@@ -772,22 +896,35 @@ static void cmd_scan(const char *arg)
 	}
 }
 
+static struct GDBusProxy *find_device(const char *arg)
+{
+	GDBusProxy *proxy;
+
+	if (!arg || !strlen(arg)) {
+		if (default_dev)
+			return default_dev;
+		rl_printf("Missing device address argument\n");
+		return NULL;
+	}
+
+	proxy = find_proxy_by_address(dev_list, arg);
+	if (!proxy) {
+		rl_printf("Device %s not available\n", arg);
+		return NULL;
+	}
+
+	return proxy;
+}
+
 static void cmd_info(const char *arg)
 {
 	GDBusProxy *proxy;
 	DBusMessageIter iter;
 	const char *address;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	if (g_dbus_proxy_get_property(proxy, "Address", &iter) == FALSE)
 		return;
@@ -828,16 +965,9 @@ static void cmd_pair(const char *arg)
 {
 	GDBusProxy *proxy;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	if (g_dbus_proxy_method_call(proxy, "Pair", NULL, pair_reply,
 							NULL, NULL) == FALSE) {
@@ -854,16 +984,9 @@ static void cmd_trust(const char *arg)
 	dbus_bool_t trusted;
 	char *str;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	trusted = TRUE;
 
@@ -883,16 +1006,9 @@ static void cmd_untrust(const char *arg)
 	dbus_bool_t trusted;
 	char *str;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	trusted = FALSE;
 
@@ -912,16 +1028,9 @@ static void cmd_block(const char *arg)
 	dbus_bool_t blocked;
 	char *str;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	blocked = TRUE;
 
@@ -941,16 +1050,9 @@ static void cmd_unblock(const char *arg)
 	dbus_bool_t blocked;
 	char *str;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	blocked = FALSE;
 
@@ -1019,6 +1121,7 @@ static void cmd_remove(const char *arg)
 
 static void connect_reply(DBusMessage *message, void *user_data)
 {
+	GDBusProxy *proxy = user_data;
 	DBusError error;
 
 	dbus_error_init(&error);
@@ -1030,6 +1133,8 @@ static void connect_reply(DBusMessage *message, void *user_data)
 	}
 
 	rl_printf("Connection successful\n");
+
+	set_default_device(proxy, NULL);
 }
 
 static void cmd_connect(const char *arg)
@@ -1048,7 +1153,7 @@ static void cmd_connect(const char *arg)
 	}
 
 	if (g_dbus_proxy_method_call(proxy, "Connect", NULL, connect_reply,
-							NULL, NULL) == FALSE) {
+							proxy, NULL) == FALSE) {
 		rl_printf("Failed to connect\n");
 		return;
 	}
@@ -1058,6 +1163,7 @@ static void cmd_connect(const char *arg)
 
 static void disconn_reply(DBusMessage *message, void *user_data)
 {
+	GDBusProxy *proxy = user_data;
 	DBusError error;
 
 	dbus_error_init(&error);
@@ -1069,30 +1175,193 @@ static void disconn_reply(DBusMessage *message, void *user_data)
 	}
 
 	rl_printf("Successful disconnected\n");
+
+	if (proxy != default_dev)
+		return;
+
+	set_default_device(NULL, NULL);
 }
 
 static void cmd_disconn(const char *arg)
 {
 	GDBusProxy *proxy;
 
-	if (!arg || !strlen(arg)) {
-		rl_printf("Missing device address argument\n");
+	proxy = find_device(arg);
+	if (!proxy)
 		return;
-	}
-
-	proxy = find_proxy_by_address(dev_list, arg);
-	if (!proxy) {
-		rl_printf("Device %s not available\n", arg);
-		return;
-	}
 
 	if (g_dbus_proxy_method_call(proxy, "Disconnect", NULL, disconn_reply,
-							NULL, NULL) == FALSE) {
+							proxy, NULL) == FALSE) {
 		rl_printf("Failed to disconnect\n");
 		return;
 	}
 
 	rl_printf("Attempting to disconnect from %s\n", arg);
+}
+
+static void cmd_list_attributes(const char *arg)
+{
+	GDBusProxy *proxy;
+
+	proxy = find_device(arg);
+	if (!proxy)
+		return;
+
+	gatt_list_attributes(g_dbus_proxy_get_path(proxy));
+}
+
+static void cmd_select_attribute(const char *arg)
+{
+	GDBusProxy *proxy;
+
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing attribute argument\n");
+		return;
+	}
+
+	if (!default_dev) {
+		rl_printf("No device connected\n");
+		return;
+	}
+
+	proxy = gatt_select_attribute(arg);
+	if (proxy)
+		set_default_attribute(proxy);
+}
+
+static struct GDBusProxy *find_attribute(const char *arg)
+{
+	GDBusProxy *proxy;
+
+	if (!arg || !strlen(arg)) {
+		if (default_attr)
+			return default_attr;
+		rl_printf("Missing attribute argument\n");
+		return NULL;
+	}
+
+	proxy = gatt_select_attribute(arg);
+	if (!proxy) {
+		rl_printf("Attribute %s not available\n", arg);
+		return NULL;
+	}
+
+	return proxy;
+}
+
+static void cmd_attribute_info(const char *arg)
+{
+	GDBusProxy *proxy;
+	DBusMessageIter iter;
+	const char *iface, *uuid, *text;
+
+	proxy = find_attribute(arg);
+	if (!proxy)
+		return;
+
+	if (g_dbus_proxy_get_property(proxy, "UUID", &iter) == FALSE)
+		return;
+
+	dbus_message_iter_get_basic(&iter, &uuid);
+
+	text = uuidstr_to_str(uuid);
+	if (!text)
+		text = g_dbus_proxy_get_path(proxy);
+
+	iface = g_dbus_proxy_get_interface(proxy);
+	if (!strcmp(iface, "org.bluez.GattService1")) {
+		rl_printf("Service - %s\n", text);
+
+		print_property(proxy, "UUID");
+		print_property(proxy, "Primary");
+		print_property(proxy, "Characteristics");
+		print_property(proxy, "Includes");
+	} else if (!strcmp(iface, "org.bluez.GattCharacteristic1")) {
+		rl_printf("Characteristic - %s\n", text);
+
+		print_property(proxy, "UUID");
+		print_property(proxy, "Service");
+		print_property(proxy, "Value");
+		print_property(proxy, "Notifying");
+		print_property(proxy, "Flags");
+		print_property(proxy, "Descriptors");
+	} else if (!strcmp(iface, "org.bluez.GattDescriptor1")) {
+		rl_printf("Descriptor - %s\n", text);
+
+		print_property(proxy, "UUID");
+		print_property(proxy, "Characteristic");
+		print_property(proxy, "Value");
+	}
+}
+
+static void cmd_read(const char *arg)
+{
+	if (!default_attr) {
+		rl_printf("No attribute selected\n");
+		return;
+	}
+
+	gatt_read_attribute(default_attr);
+}
+
+static void cmd_write(const char *arg)
+{
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing data argument\n");
+		return;
+	}
+
+	if (!default_attr) {
+		rl_printf("No attribute selected\n");
+		return;
+	}
+
+	gatt_write_attribute(default_attr, arg);
+}
+
+static void cmd_notify(const char *arg)
+{
+	dbus_bool_t enable;
+
+	if (parse_argument_on_off(arg, &enable) == FALSE)
+		return;
+
+	if (!default_attr) {
+		rl_printf("No attribute selected\n");
+		return;
+	}
+
+	gatt_notify_attribute(default_attr, enable ? true : false);
+}
+
+static void cmd_register_profile(const char *arg)
+{
+	wordexp_t w;
+
+	if (check_default_ctrl() == FALSE)
+		return;
+
+	if (wordexp(arg, &w, WRDE_NOCMD)) {
+		rl_printf("Invalid argument\n");
+		return;
+	}
+
+	if (w.we_wordc == 0) {
+		rl_printf("Missing argument\n");
+		return;
+	}
+
+	gatt_register_profile(dbus_conn, default_ctrl, &w);
+
+	wordfree(&w);
+}
+
+static void cmd_unregister_profile(const char *arg)
+{
+	if (check_default_ctrl() == FALSE)
+		return;
+
+	gatt_unregister_profile(dbus_conn, default_ctrl);
 }
 
 static void cmd_version(const char *arg)
@@ -1146,6 +1415,11 @@ static char *dev_generator(const char *text, int state)
 	return generic_generator(text, state, dev_list, "Address");
 }
 
+static char *attribute_generator(const char *text, int state)
+{
+	return gatt_attribute_generator(text, state);
+}
+
 static char *capability_generator(const char *text, int state)
 {
 	static int index, len;
@@ -1195,24 +1469,38 @@ static const struct {
 	{ "default-agent",NULL,       cmd_default_agent,
 				"Set agent as the default one" },
 	{ "scan",         "<on/off>", cmd_scan, "Scan for devices" },
-	{ "info",         "<dev>",    cmd_info, "Device information",
+	{ "info",         "[dev]",    cmd_info, "Device information",
 							dev_generator },
-	{ "pair",         "<dev>",    cmd_pair, "Pair with device",
+	{ "pair",         "[dev]",    cmd_pair, "Pair with device",
 							dev_generator },
-	{ "trust",        "<dev>",    cmd_trust, "Trust device",
+	{ "trust",        "[dev]",    cmd_trust, "Trust device",
 							dev_generator },
-	{ "untrust",      "<dev>",    cmd_untrust, "Untrust device",
+	{ "untrust",      "[dev]",    cmd_untrust, "Untrust device",
 							dev_generator },
-	{ "block",        "<dev>",    cmd_block, "Block device",
+	{ "block",        "[dev]",    cmd_block, "Block device",
 								dev_generator },
-	{ "unblock",      "<dev>",    cmd_unblock, "Unblock device",
+	{ "unblock",      "[dev]",    cmd_unblock, "Unblock device",
 								dev_generator },
 	{ "remove",       "<dev>",    cmd_remove, "Remove device",
 							dev_generator },
 	{ "connect",      "<dev>",    cmd_connect, "Connect device",
 							dev_generator },
-	{ "disconnect",   "<dev>",    cmd_disconn, "Disconnect device",
+	{ "disconnect",   "[dev]",    cmd_disconn, "Disconnect device",
 							dev_generator },
+	{ "list-attributes", "[dev]", cmd_list_attributes, "List attributes",
+							dev_generator },
+	{ "select-attribute", "<attribute>",  cmd_select_attribute,
+				"Select attribute", attribute_generator },
+	{ "attribute-info", "[attribute]",  cmd_attribute_info,
+				"Select attribute", attribute_generator },
+	{ "read",         NULL,       cmd_read, "Read attribute value" },
+	{ "write",        "<data=[xx xx ...]>", cmd_write,
+						"Write attribute value" },
+	{ "notify",       "<on/off>", cmd_notify, "Notify attribute value" },
+	{ "register-profile", "<UUID ...>", cmd_register_profile,
+						"Register profile to connect" },
+	{ "unregister-profile", NULL, cmd_unregister_profile,
+						"Unregister profile" },
 	{ "version",      NULL,       cmd_version, "Display version" },
 	{ "quit",         NULL,       cmd_quit, "Quit program" },
 	{ "exit",         NULL,       cmd_quit },

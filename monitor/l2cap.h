@@ -29,6 +29,7 @@ struct l2cap_frame {
 	uint16_t index;
 	bool in;
 	uint16_t handle;
+	uint8_t ident;
 	uint16_t cid;
 	uint16_t psm;
 	uint16_t chan;
@@ -44,6 +45,7 @@ static inline void l2cap_frame_pull(struct l2cap_frame *frame,
 		frame->index   = source->index;
 		frame->in      = source->in;
 		frame->handle  = source->handle;
+		frame->ident   = source->ident;
 		frame->cid     = source->cid;
 		frame->psm     = source->psm;
 		frame->chan    = source->chan;
@@ -92,7 +94,7 @@ static inline bool l2cap_frame_get_le16(struct l2cap_frame *frame,
 
 	l2cap_frame_pull(frame, frame, sizeof(*value));
 
-	return 0;
+	return true;
 }
 
 static inline bool l2cap_frame_get_be32(struct l2cap_frame *frame,
@@ -153,3 +155,5 @@ static inline bool l2cap_frame_get_le64(struct l2cap_frame *frame,
 
 void l2cap_packet(uint16_t index, bool in, uint16_t handle, uint8_t flags,
 					const void *data, uint16_t size);
+
+void rfcomm_packet(const struct l2cap_frame *frame);

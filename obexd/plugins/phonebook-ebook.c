@@ -28,14 +28,15 @@
 
 #include <string.h>
 #include <errno.h>
-#include <glib.h>
-#include <bluetooth/bluetooth.h>
 
+#include <glib.h>
 #include <libebook/e-book.h>
 
-#include "log.h"
-#include "obex.h"
-#include "service.h"
+#include "lib/bluetooth.h"
+
+#include "obexd/src/log.h"
+#include "obexd/src/obex.h"
+#include "obexd/src/service.h"
 #include "phonebook.h"
 
 #define QUERY_FN "(contains \"family_name\" \"%s\")"

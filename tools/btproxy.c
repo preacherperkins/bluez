@@ -44,8 +44,11 @@
 #include <arpa/inet.h>
 
 #include "src/shared/util.h"
-#include "monitor/mainloop.h"
+#include "src/shared/mainloop.h"
 #include "monitor/bt.h"
+
+#define HCI_BREDR	0x00
+#define HCI_AMP		0x01
 
 #define BTPROTO_HCI	1
 struct sockaddr_hci {
@@ -563,6 +566,7 @@ static void usage(void)
 		"\t-u, --unix [path]           Use Unix server\n"
 		"\t-p, --port <port>           Use specified TCP port\n"
 		"\t-i, --index <num>           Use specified controller\n"
+		"\t-a, --amp                   Create AMP controller\n"
 		"\t-d, --debug                 Enable debugging output\n"
 		"\t-h, --help                  Show help options\n");
 }
@@ -573,6 +577,7 @@ static const struct option main_options[] = {
 	{ "unix",    optional_argument, NULL, 'u' },
 	{ "port",    required_argument, NULL, 'p' },
 	{ "index",   required_argument, NULL, 'i' },
+	{ "amp",     no_argument,       NULL, 'a' },
 	{ "debug",   no_argument,       NULL, 'd' },
 	{ "version", no_argument,       NULL, 'v' },
 	{ "help",    no_argument,       NULL, 'h' },
@@ -585,18 +590,22 @@ int main(int argc, char *argv[])
 	const char *server_address = NULL;
 	const char *unix_path = NULL;
 	unsigned short tcp_port = 0xb1ee;	/* 45550 */
+	uint8_t type = HCI_BREDR;
 	const char *str;
 	sigset_t mask;
 
 	for (;;) {
 		int opt;
 
-		opt = getopt_long(argc, argv, "c:l::u::p:i:dvh",
+		opt = getopt_long(argc, argv, "ac:l::u::p:i:dvh",
 						main_options, NULL);
 		if (opt < 0)
 			break;
 
 		switch (opt) {
+		case 'a':
+			type = HCI_AMP;
+			break;
 		case 'c':
 			connect_address = optarg;
 			break;
@@ -674,7 +683,7 @@ int main(int argc, char *argv[])
 
 		printf("Opening virtual device\n");
 
-		host_fd = open_vhci(0x00);
+		host_fd = open_vhci(type);
 		if (host_fd < 0) {
 			close(dev_fd);
 			return EXIT_FAILURE;
